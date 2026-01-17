@@ -38,6 +38,45 @@ def get_start_time(option):
     return datetime.utcnow() - timedelta(days=30)
 
 def infer_peru_location(profile_location: str, profile_desc: str):
+    
+    """
+    Inferencia ética y simple:
+    - Usa 'location' del perfil (si existe)
+    - Busca menciones a lugares de Perú
+    - Devuelve (ubicacion_inferida, confianza, fuente)
+    """
+    loc = (profile_location or "").strip()
+    desc = (profile_desc or "").strip()
+
+    # Normalizamos texto para comparar
+    haystack = f"{loc} {desc}".lower()
+
+    # Señales de Perú
+    peru_signals = ["perú", "peru", "🇵🇪", "lima", "cusco", "arequipa", "piura", "callao"]
+    mentions_peru = any(s in haystack for s in peru_signals)
+
+    # Buscar match exacto (case-insensitive) de lista
+    for place in PERU_PLACES:
+        if re.search(rf"\b{re.escape(place.lower())}\b", haystack):
+            # Confianza:
+            # - Media si viene del campo location del perfil
+            # - Baja si viene solo de la bio/description
+            if loc and place.lower() in loc.lower():
+                return place, "Media", "Perfil (location)"
+            return place, "Baja", "Bio/Descripción"
+
+    # Si solo dice "Perú" sin región
+    if loc and ("perú" in loc.lower() or "peru" in loc.lower() or "🇵🇪" in loc):
+        return "Perú (sin región)", "Baja", "Perfil (location)"
+
+    # Sin datos
+    if not loc and not desc:
+        return "No disponible", "N/A", "Sin datos"
+
+    # Algo hay, pero no identificamos región
+    if mentions_peru:
+        return "Perú (no identificada)", "Baja", "Señales en perfil/bio"
+    return "No inferible", "N/A", "Sin señales claras"
 
 # ─────────────────────────────
 # Sentimiento con Hugging Face (CardiffNLP Twitter-RoBERTa)
@@ -92,46 +131,6 @@ def sentimiento_hf(texto: str):
 
     except Exception:
         return None, None
-
-    
-    """
-    Inferencia ética y simple:
-    - Usa 'location' del perfil (si existe)
-    - Busca menciones a lugares de Perú
-    - Devuelve (ubicacion_inferida, confianza, fuente)
-    """
-    loc = (profile_location or "").strip()
-    desc = (profile_desc or "").strip()
-
-    # Normalizamos texto para comparar
-    haystack = f"{loc} {desc}".lower()
-
-    # Señales de Perú
-    peru_signals = ["perú", "peru", "🇵🇪", "lima", "cusco", "arequipa", "piura", "callao"]
-    mentions_peru = any(s in haystack for s in peru_signals)
-
-    # Buscar match exacto (case-insensitive) de lista
-    for place in PERU_PLACES:
-        if re.search(rf"\b{re.escape(place.lower())}\b", haystack):
-            # Confianza:
-            # - Media si viene del campo location del perfil
-            # - Baja si viene solo de la bio/description
-            if loc and place.lower() in loc.lower():
-                return place, "Media", "Perfil (location)"
-            return place, "Baja", "Bio/Descripción"
-
-    # Si solo dice "Perú" sin región
-    if loc and ("perú" in loc.lower() or "peru" in loc.lower() or "🇵🇪" in loc):
-        return "Perú (sin región)", "Baja", "Perfil (location)"
-
-    # Sin datos
-    if not loc and not desc:
-        return "No disponible", "N/A", "Sin datos"
-
-    # Algo hay, pero no identificamos región
-    if mentions_peru:
-        return "Perú (no identificada)", "Baja", "Señales en perfil/bio"
-    return "No inferible", "N/A", "Sin señales claras"
 
 if st.button("Buscar en X"):
     if not query:
