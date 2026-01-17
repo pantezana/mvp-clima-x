@@ -4,21 +4,34 @@ import re
 import pandas as pd
 from datetime import datetime, timedelta
 
+# ─────────────────────────────
+# Configuración básica
+# ─────────────────────────────
 st.set_page_config(page_title="MVP Clima en X", layout="wide")
 st.title("📊 MVP – Clima del Tema en X")
 
+st.info(
+    "ℹ️ Esta herramienta usa la API pública de X.\n"
+    "Los resultados están sujetos a límites de cuota.\n"
+    "Las consultas se cachean por 5 minutos para evitar bloqueos."
+)
+
+# ─────────────────────────────
+# Conexión a X (API oficial)
+# ─────────────────────────────
 bearer_token = st.secrets["X_BEARER_TOKEN"]
 client = tweepy.Client(bearer_token=bearer_token)
-
 st.success("Conectado a X correctamente ✅")
 
 # ─────────────────────────────
-# Inputs
+# Inputs del usuario
 # ─────────────────────────────
 query = st.text_input("Palabras clave / hashtags")
 time_range = st.selectbox("Rango temporal", ["24 horas", "7 días", "30 días"])
 
-# Lista simple (MVP) de departamentos/ciudades clave para inferir ubicación
+# ─────────────────────────────
+# Utilidades
+# ─────────────────────────────
 PERU_PLACES = [
     "Amazonas","Áncash","Apurímac","Arequipa","Ayacucho","Cajamarca","Callao","Cusco",
     "Huancavelica","Huánuco","Ica","Junín","La Libertad","Lambayeque","Lima","Loreto",
@@ -36,7 +49,6 @@ def get_start_time(option):
 def infer_peru_location(profile_location: str, profile_desc: str):
     loc = (profile_location or "").strip()
     desc = (profile_desc or "").strip()
-
     haystack = f"{loc} {desc}".lower()
 
     peru_signals = ["perú", "peru", "🇵🇪", "lima", "cusco", "arequipa", "piura", "callao"]
@@ -60,16 +72,11 @@ def infer_peru_location(profile_location: str, profile_desc: str):
     return "No inferible", "N/A", "Sin señales claras"
 
 # ─────────────────────────────
-# Acción
+# FUNCIÓN CACHEADA (CLAVE)
 # ─────────────────────────────
-if st.button("Buscar en X"):
-    if not query:
-        st.warning("Ingresa una palabra clave")
-        st.stop()
-
-    start_time = get_start_time(time_range).isoformat("T") + "Z"
-
-    response = client.search_recent_tweets(
+@st.cache_data(ttl=300)  # 5 minutos
+def buscar_en_x(query, start_time):
+    return client.search_recent_tweets(
         query=query,
         start_time=start_time,
         max_results=50,
@@ -78,11 +85,31 @@ if st.button("Buscar en X"):
         user_fields=["username", "name", "location", "description"]
     )
 
+# ─────────────────────────────
+# Acción principal
+# ─────────────────────────────
+if st.button("Buscar en X"):
+    if not query:
+        st.warning("Ingresa una palabra clave")
+        st.stop()
+
+    start_time = get_start_time(time_range).isoformat("T") + "Z"
+
+    try:
+        response = buscar_en_x(query, start_time)
+    except tweepy.errors.TooManyRequests:
+        st.error(
+            "⚠️ Límite de consultas alcanzado en X.\n\n"
+            "Esto es normal en planes gratuitos.\n"
+            "Espera unos minutos y vuelve a intentar."
+        )
+        st.stop()
+
     if not response.data:
         st.warning("No se encontraron resultados")
         st.stop()
 
-    # Mapa author_id -> user
+    # Mapa author_id → user
     users_by_id = {}
     if response.includes and "users" in response.includes:
         users_by_id = {u.id: u for u in response.includes["users"]}
@@ -114,7 +141,10 @@ if st.button("Buscar en X"):
     df = pd.DataFrame(data)
 
     st.subheader("Resultados encontrados")
-    st.caption("Nota: la ubicación NO es exacta; es una inferencia basada en 'location' del perfil y/o bio. Úsala solo como aproximación.")
+    st.caption(
+        "Nota: la ubicación NO es exacta; es una inferencia basada en el perfil del usuario "
+        "y señales textuales. Usar solo como aproximación."
+    )
 
     # ── Filtro por ubicación inferida
     ubicaciones = ["(Todas)"] + sorted(df["Ubicación inferida"].dropna().unique().tolist())
