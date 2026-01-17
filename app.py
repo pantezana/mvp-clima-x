@@ -171,8 +171,6 @@ if st.button("Buscar en X"):
             file_name="resultados_x.csv",
             mime="text/csv"
         )
-
-
         else:
             st.warning("No se encontraron resultados")
 
