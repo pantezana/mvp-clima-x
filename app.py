@@ -10,3 +10,11 @@ client = tweepy.Client(bearer_token=bearer_token)
 
 st.success("Conectado a X correctamente ✅")
 
+query = st.text_input("Palabras clave / hashtags")
+time_range = st.selectbox(
+    "Rango temporal",
+    ["24 horas", "7 días", "30 días"]
+)
+
+if st.button("Consultar"):
+    st.write("Consulta enviada:", query, time_range)
