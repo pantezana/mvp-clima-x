@@ -270,6 +270,3 @@ st.caption(
     "y debe interpretarse como una señal temprana, no como medición estadística."
 )
 
-
-        else:
-            st.warning("No se encontraron resultados")
