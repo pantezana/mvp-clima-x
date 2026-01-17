@@ -83,7 +83,7 @@ def infer_peru_location(profile_location: str, profile_desc: str):
 # ─────────────────────────────
 HF_TOKEN = st.secrets.get("HF_TOKEN", "")
 
-HF_MODEL_URL = "https://api-inference.huggingface.co/models/cardiffnlp/twitter-roberta-base-sentiment-latest"
+HF_MODEL_URL = "https://router.huggingface.co/hf-inference/models/cardiffnlp/twitter-roberta-base-sentiment-latest"
 
 def sentimiento_hf(texto: str):
     """
