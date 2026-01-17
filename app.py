@@ -161,35 +161,35 @@ if st.button("Buscar en X"):
 
         # Pedimos también info del autor vía expansions
         try:
-        response = client.search_recent_tweets(
-            query=query,
-            start_time=start_time,
-            max_results=50,
-            tweet_fields=["created_at", "public_metrics", "author_id"],
-            expansions=["author_id"],
-            user_fields=["username", "name", "location", "description"]
-        )
+            response = client.search_recent_tweets(
+                query=query,
+                start_time=start_time,
+                max_results=50,
+                tweet_fields=["created_at", "public_metrics", "author_id"],
+                expansions=["author_id"],
+                user_fields=["username", "name", "location", "description"]
+            )
         except tweepy.errors.TooManyRequests as e:
-        # Intentar leer "reset time" si existe
-        reset_info = ""
-        try:
-            reset_ts = int(e.response.headers.get("x-rate-limit-reset", "0"))
-            if reset_ts:
-                wait_sec = max(0, reset_ts - int(time.time()))
-                wait_min = max(1, int(round(wait_sec / 60)))
-                reset_info = f"⏳ Intenta nuevamente en ~{wait_min} min."
-        except Exception:
-            pass
-    
-        st.error(
-            "⚠️ Límite de consultas alcanzado en la API de X (rate limit).\n\n"
-            "Esto ocurre cuando se hacen varias búsquedas en poco tiempo (por el mismo token o porque la app es pública). "
-            + reset_info
-        )
-        st.stop()
+            # Intentar leer "reset time" si existe
+            reset_info = ""
+            try:
+                reset_ts = int(e.response.headers.get("x-rate-limit-reset", "0"))
+                if reset_ts:
+                    wait_sec = max(0, reset_ts - int(time.time()))
+                    wait_min = max(1, int(round(wait_sec / 60)))
+                    reset_info = f"⏳ Intenta nuevamente en ~{wait_min} min."
+            except Exception:
+                pass
+        
+            st.error(
+                "⚠️ Límite de consultas alcanzado en la API de X (rate limit).\n\n"
+                "Esto ocurre cuando se hacen varias búsquedas en poco tiempo (por el mismo token o porque la app es pública). "
+                + reset_info
+            )
+            st.stop()
         except Exception as e:
-        st.error(f"⚠️ Error inesperado al consultar X: {type(e).__name__}")
-        st.stop()
+            st.error(f"⚠️ Error inesperado al consultar X: {type(e).__name__}")
+            st.stop()
 
         if response.data:
             # Mapa author_id -> objeto user
