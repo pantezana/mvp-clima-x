@@ -153,7 +153,16 @@ def sentimiento_hf(texto: str):
     except Exception:
         return None, None
 
+if "last_search_ts" not in st.session_state:
+    st.session_state["last_search_ts"] = 0
+
 if st.button("Buscar en X"):
+    now = time.time()
+    if now - st.session_state["last_search_ts"] < 20:
+        st.warning("Espera 20 segundos entre búsquedas para evitar límites de X.")
+        st.stop()
+    st.session_state["last_search_ts"] = now
+
     if not query:
         st.warning("Ingresa una palabra clave")
     else:
