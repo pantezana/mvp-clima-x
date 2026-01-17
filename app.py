@@ -132,5 +132,144 @@ if st.button("Buscar en X"):
             # Mostrar tabla
             st.dataframe(df, use_container_width=True)
 
+           # ─────────────────────────────
+# ANÁLISIS GERENCIAL
+# ─────────────────────────────
+
+st.markdown("## 🧠 Resumen Ejecutivo Automático")
+
+# --- Preparación de texto
+textos = df["Texto"].str.lower()
+
+# Stopwords básicas en español (MVP)
+stopwords = set([
+    "de","la","que","el","en","y","a","los","del","se","las","por","un","para","con",
+    "no","una","su","al","lo","como","más","pero","sus","le","ya","o","este","sí",
+    "porque","esta","entre","cuando","muy","sin","sobre"
+])
+
+def limpiar_texto(texto):
+    palabras = re.findall(r"\b[a-záéíóúñ]+\b", texto)
+    return [p for p in palabras if p not in stopwords and len(p) > 3]
+
+# --- Narrativas dominantes
+todas_palabras = []
+for t in textos:
+    todas_palabras.extend(limpiar_texto(t))
+
+top_palabras = pd.Series(todas_palabras).value_counts().head(10)
+
+# --- Sentimiento simple (léxico)
+positivas = set([
+    # Aprobación directa
+    "bueno","bien","positivo","excelente","correcto","adecuado","acertado","justo",
+    
+    # Progreso / avance
+    "avance","avanzar","mejora","mejorar","progreso","logro","logrado","resultado",
+    
+    # Confianza / esperanza
+    "confianza","esperanza","optimismo","tranquilidad","seguridad","estabilidad",
+    
+    # Gestión / política pública
+    "cumple","cumplió","eficiente","efectivo","funciona","solución","resuelve",
+    
+    # Legitimidad / respaldo
+    "apoyo","respaldo","legítimo","necesario","importante","prioritario",
+    
+    # Éxito / impacto
+    "exitoso","beneficio","beneficioso","impacto","positivo","histórico"
+])
+
+negativas = set([
+    # Rechazo directo
+    "malo","mal","negativo","pésimo","terrible","inaceptable","vergonzoso",
+    
+    # Crisis / conflicto
+    "crisis","conflicto","caos","problema","grave","colapso","fracaso",
+    
+    # Desconfianza / enojo
+    "indignación","enojo","rabia","molestia","hartazgo","descontento",
+    
+    # Gestión deficiente
+    "ineficiente","incapaz","incompetente","error","fallo","improvisación",
+    
+    # Corrupción / legitimidad
+    "corrupción","corrupto","ilegal","irregular","fraude","impunidad",
+    
+    # Miedo / riesgo
+    "peligro","amenaza","riesgo","inseguridad","violencia","abuso",
+    
+    # Protesta / rechazo social
+    "rechazo","repudio","protesta","denuncia","escándalo"
+])
+
+
+def calcular_sentimiento(texto):
+    palabras = limpiar_texto(texto)
+    pos = sum(1 for p in palabras if p in positivas)
+    neg = sum(1 for p in palabras if p in negativas)
+    if pos > neg:
+        return "Positivo"
+    if neg > pos:
+        return "Negativo"
+    return "Neutral"
+
+df["Sentimiento"] = df["Texto"].apply(calcular_sentimiento)
+
+# --- Métricas de temperatura
+total = len(df)
+pct_pos = round((df["Sentimiento"] == "Positivo").mean() * 100, 1)
+pct_neg = round((df["Sentimiento"] == "Negativo").mean() * 100, 1)
+pct_neu = round((df["Sentimiento"] == "Neutral").mean() * 100, 1)
+
+if pct_neg > 40:
+    temperatura = "🔴 Riesgo reputacional"
+elif pct_pos > 60:
+    temperatura = "🟢 Clima favorable"
+else:
+    temperatura = "🟡 Clima mixto / neutro"
+
+# --- Mostrar resumen ejecutivo
+st.markdown("### 📌 Principales hallazgos")
+
+st.markdown(f"""
+- **Volumen analizado:** {total} publicaciones  
+- **Temperatura del tema:** {temperatura}  
+- **Distribución de sentimiento:**  
+  - Positivo: {pct_pos}%  
+  - Neutral: {pct_neu}%  
+  - Negativo: {pct_neg}%  
+- **Narrativas dominantes:** {', '.join(top_palabras.index.tolist())}
+""")
+
+# --- Riesgos y oportunidades
+st.markdown("### ⚠️ Riesgos identificados")
+if pct_neg > 30:
+    st.markdown("- Presencia relevante de mensajes negativos que podrían escalar si aumenta el volumen.")
+else:
+    st.markdown("- No se identifican riesgos reputacionales significativos en el periodo analizado.")
+
+st.markdown("### 🌱 Oportunidades")
+if pct_pos > pct_neg:
+    st.markdown("- Predominan mensajes favorables que pueden reforzarse con información clara y oportuna.")
+else:
+    st.markdown("- Existe oportunidad de clarificar información y reducir ambigüedad en la conversación.")
+
+st.markdown("### 👀 Qué monitorear mañana")
+st.markdown("""
+- Evolución del volumen de publicaciones.
+- Aparición de nuevos términos o hashtags.
+- Cambios en la proporción de sentimiento negativo.
+- Mayor actividad desde regiones específicas.
+""")
+
+st.markdown("### ⚖️ Advertencia metodológica")
+st.caption(
+    "Este análisis se basa en publicaciones públicas de X, con inferencia aproximada de ubicación "
+    "y análisis automático de texto. No representa la opinión de la totalidad de la población "
+    "y debe interpretarse como una señal temprana, no como medición estadística."
+)
+
+
         else:
             st.warning("No se encontraron resultados")
