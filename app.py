@@ -20,6 +20,24 @@ time_range = st.selectbox(
     ["24 horas", "7 días", "30 días"]
 )
 
+# ─────────────────────────────
+# Selector de modelo de sentimiento (Hugging Face)
+# ─────────────────────────────
+MODELOS_SENTIMIENTO = {
+    "BETO (ES) – recomendado": "finiteautomata/beto-sentiment-analysis",
+    "Robertuito (ES) – social": "pysentimiento/robertuito-sentiment-analysis",
+    "Twitter-RoBERTa (X) – actual": "cardiffnlp/twitter-roberta-base-sentiment-latest",
+}
+
+modelo_nombre = st.selectbox(
+    "Modelo de sentimiento (IA)",
+    list(MODELOS_SENTIMIENTO.keys()),
+    index=0
+)
+
+modelo_hf_id = MODELOS_SENTIMIENTO[modelo_nombre]
+HF_MODEL_URL = f"https://router.huggingface.co/hf-inference/models/{modelo_hf_id}"
+
 
 # Lista simple (MVP) de departamentos/ciudades clave para inferir ubicación
 PERU_PLACES = [
@@ -81,51 +99,53 @@ def infer_peru_location(profile_location: str, profile_desc: str):
 # ─────────────────────────────
 # Sentimiento con Hugging Face (CardiffNLP Twitter-RoBERTa)
 # ─────────────────────────────
-HF_TOKEN = st.secrets.get("HF_TOKEN", "")
-
-HF_MODEL_URL = "https://router.huggingface.co/hf-inference/models/cardiffnlp/twitter-roberta-base-sentiment-latest"
 
 def sentimiento_hf(texto: str):
     """
     Devuelve: (sentimiento, score)
-    sentimiento: Positivo / Neutral / Negativo
-    score: confianza aproximada (0 a 1)
+    - sentimiento: Positivo / Neutral / Negativo o None
+    - score: confianza 0..1 o None
     """
+    HF_TOKEN = st.secrets.get("HF_TOKEN", "")
     if not HF_TOKEN:
         return None, None
 
     headers = {"Authorization": f"Bearer {HF_TOKEN}"}
-    payload = {"inputs": texto[:512]}  # recortamos para seguridad
+    payload = {"inputs": texto[:512]}
 
     try:
-        r = requests.post(HF_MODEL_URL, headers=headers, json=payload, timeout=20)
+        r = requests.post(HF_MODEL_URL, headers=headers, json=payload, timeout=25)
         if r.status_code != 200:
             return None, None
 
         data = r.json()
 
-        # La respuesta suele venir como lista de dicts: [{label: ..., score: ...}, ...]
-        # A veces viene como lista dentro de lista: [[{...},{...},{...}]]
+        # A veces viene [[...]]
         if isinstance(data, list) and len(data) > 0 and isinstance(data[0], list):
             data = data[0]
 
-        # Elegimos el label con mayor score
+        if not isinstance(data, list) or len(data) == 0:
+            return None, None
+
         best = max(data, key=lambda x: x.get("score", 0))
         label = best.get("label", "")
         score = best.get("score", 0)
 
-        # Mapeo a español
         mapping = {
             "positive": "Positivo",
             "neutral": "Neutral",
             "negative": "Negativo",
-            "LABEL_2": "Positivo",  # por si viene en formato antiguo
+            "pos": "Positivo",
+            "neu": "Neutral",
+            "neg": "Negativo",
+            "LABEL_2": "Positivo",
             "LABEL_1": "Neutral",
             "LABEL_0": "Negativo",
         }
 
-        label_lower = label.lower()
-        sentimiento = mapping.get(label_lower, mapping.get(label, None))
+        sentimiento = mapping.get(label.lower(), mapping.get(label, None))
+        if sentimiento is None:
+            return None, None
 
         return sentimiento, round(float(score), 3)
 
@@ -255,7 +275,6 @@ if st.button("Buscar en X"):
                 "rechazo","repudio","protesta","denuncia","escándalo"
             ])
             
-            
             def calcular_sentimiento(texto):
                 palabras = limpiar_texto(texto)
                 pos = sum(1 for p in palabras if p in positivas)
@@ -292,8 +311,13 @@ if st.button("Buscar en X"):
             pct_neg = round((df["Sentimiento"] == "Negativo").mean() * 100, 1)
             pct_neu = round((df["Sentimiento"] == "Neutral").mean() * 100, 1)
 
-            metodo_sent = "IA (Hugging Face)" if df["Sentimiento_HF"].notna().any() else "Léxico (fallback)"
-            st.caption(f"Método de sentimiento: {metodo_sent}. Score HF es una confianza aproximada (0–1).")
+            hf_ok = df["Sentimiento_HF"].notna().sum()
+            if hf_ok > 0:
+                metodo_sent = f"IA (Hugging Face) – {modelo_hf_id}"
+            else:
+                metodo_sent = "Léxico (fallback)"
+            
+            st.caption(f"Método de sentimiento: {metodo_sent}. IA clasificó {hf_ok}/{len(df)} textos. Score HF ≈ confianza (0–1).")
 
             if pct_neg > 40:
                 temperatura = "🔴 Riesgo reputacional"
