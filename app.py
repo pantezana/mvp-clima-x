@@ -132,7 +132,7 @@ if st.button("Buscar en X"):
             # Mostrar tabla
             st.dataframe(df, use_container_width=True)
 
-           # ─────────────────────────────
+# ─────────────────────────────
 # ANÁLISIS GERENCIAL
 # ─────────────────────────────
 
