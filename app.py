@@ -2,6 +2,7 @@ import streamlit as st
 import tweepy
 import re
 import pandas as pd
+import requests
 from datetime import datetime, timedelta
 
 st.set_page_config(page_title="MVP Clima en X", layout="wide")
@@ -37,6 +38,62 @@ def get_start_time(option):
     return datetime.utcnow() - timedelta(days=30)
 
 def infer_peru_location(profile_location: str, profile_desc: str):
+
+# ─────────────────────────────
+# Sentimiento con Hugging Face (CardiffNLP Twitter-RoBERTa)
+# ─────────────────────────────
+HF_TOKEN = st.secrets.get("HF_TOKEN", "")
+
+HF_MODEL_URL = "https://api-inference.huggingface.co/models/cardiffnlp/twitter-roberta-base-sentiment-latest"
+
+def sentimiento_hf(texto: str):
+    """
+    Devuelve: (sentimiento, score)
+    sentimiento: Positivo / Neutral / Negativo
+    score: confianza aproximada (0 a 1)
+    """
+    if not HF_TOKEN:
+        return None, None
+
+    headers = {"Authorization": f"Bearer {HF_TOKEN}"}
+    payload = {"inputs": texto[:512]}  # recortamos para seguridad
+
+    try:
+        r = requests.post(HF_MODEL_URL, headers=headers, json=payload, timeout=20)
+        if r.status_code != 200:
+            return None, None
+
+        data = r.json()
+
+        # La respuesta suele venir como lista de dicts: [{label: ..., score: ...}, ...]
+        # A veces viene como lista dentro de lista: [[{...},{...},{...}]]
+        if isinstance(data, list) and len(data) > 0 and isinstance(data[0], list):
+            data = data[0]
+
+        # Elegimos el label con mayor score
+        best = max(data, key=lambda x: x.get("score", 0))
+        label = best.get("label", "")
+        score = best.get("score", 0)
+
+        # Mapeo a español
+        mapping = {
+            "positive": "Positivo",
+            "neutral": "Neutral",
+            "negative": "Negativo",
+            "LABEL_2": "Positivo",  # por si viene en formato antiguo
+            "LABEL_1": "Neutral",
+            "LABEL_0": "Negativo",
+        }
+
+        label_lower = label.lower()
+        sentimiento = mapping.get(label_lower, mapping.get(label, None))
+
+        return sentimiento, round(float(score), 3)
+
+    except Exception:
+        return None, None
+
+    
     """
     Inferencia ética y simple:
     - Usa 'location' del perfil (si existe)
@@ -210,14 +267,35 @@ if st.button("Buscar en X"):
                     return "Negativo"
                 return "Neutral"
             
-            df["Sentimiento"] = df["Texto"].apply(calcular_sentimiento)
+            # 1) Intentamos con Hugging Face (IA)
+            sent_hf = []
+            score_hf = []
             
+            for txt in df["Texto"].tolist():
+                s, sc = sentimiento_hf(txt)
+                sent_hf.append(s)
+                score_hf.append(sc)
+            
+            df["Sentimiento_HF"] = sent_hf
+            df["Score_HF"] = score_hf
+            
+            # 2) Si Hugging Face falla, usamos el plan B (léxico)
+            df["Sentimiento_Lex"] = df["Texto"].apply(calcular_sentimiento)
+            
+            # 3) Sentimiento final:
+            # - Si HF dio respuesta: usamos HF
+            # - Si HF no dio: usamos Lex
+            df["Sentimiento"] = df["Sentimiento_HF"].fillna(df["Sentimiento_Lex"])
+
             # --- Métricas de temperatura
             total = len(df)
             pct_pos = round((df["Sentimiento"] == "Positivo").mean() * 100, 1)
             pct_neg = round((df["Sentimiento"] == "Negativo").mean() * 100, 1)
             pct_neu = round((df["Sentimiento"] == "Neutral").mean() * 100, 1)
-            
+
+            metodo_sent = "IA (Hugging Face)" if df["Sentimiento_HF"].notna().any() else "Léxico (fallback)"
+            st.caption(f"Método de sentimiento: {metodo_sent}. Score HF es una confianza aproximada (0–1).")
+
             if pct_neg > 40:
                 temperatura = "🔴 Riesgo reputacional"
             elif pct_pos > 60:
