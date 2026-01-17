@@ -16,9 +16,6 @@ time_range = st.selectbox(
     ["24 horas", "7 días", "30 días"]
 )
 
-if st.button("Consultar"):
-    st.write("Consulta enviada:", query, time_range)
-
 from datetime import datetime, timedelta
 import pandas as pd
 
