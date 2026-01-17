@@ -4,3 +4,4 @@ tweepy
 scikit-learn
 textblob
 requests
+plotly
