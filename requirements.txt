@@ -3,3 +3,4 @@ pandas
 tweepy
 scikit-learn
 textblob
+requests
