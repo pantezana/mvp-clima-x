@@ -473,10 +473,14 @@ if st.button("Buscar en X"):
             top_posts = df.sort_values("Interacción", ascending=False).head(10)
             
             st.markdown("### 🔥 Top 10 posts por interacción (Likes + Retweets)")
-            st.dataframe(
-                top_posts[["Autor", "Fecha", "Likes", "Retweets", "Interacción", "Texto", "URL"]],
-                use_container_width=True
+            top_posts = top_posts.copy()
+            top_posts["Link"] = top_posts["URL"].apply(lambda u: f'<a href="{u}" target="_blank">Abrir</a>' if u else "")
+
+           st.markdown(
+                top_posts[["Autor", "Fecha", "Likes", "Retweets", "Interacción", "Texto", "Link"]].to_html(escape=False, index=False),
+                unsafe_allow_html=True
             )
+
 
 
 
