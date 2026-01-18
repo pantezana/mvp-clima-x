@@ -257,232 +257,201 @@ if st.button("Buscar en X"):
                 palabras = re.findall(r"\b[a-záéíóúñ]+\b", texto)
                 return [p for p in palabras if p not in stopwords and len(p) > 3]
             
-            # --- Narrativas dominantes
-            todas_palabras = []
-            for t in textos:
-                todas_palabras.extend(limpiar_texto(t))
+            # ============================================================
+            # ✅ BLOQUE UNIFICADO (KPI + Resumen ejecutivo + Gráficos + Tabla)
+            # PÉGALO dentro de tu flujo, después de tener:
+            # - df armado con columnas: Texto, Fecha, Likes, Retweets, Autor, URL, Ubicación inferida...
+            # - df["Sentimiento"] ya calculado (HF + fallback)
+            # - funciones limpiar_texto(...) y stopwords ya definidas
+            # Reemplaza tu bloque actual desde:
+            # "### 📌 Principales hallazgos" hasta el final de gráficos/tabla
+            # ============================================================
             
-            top_palabras = pd.Series(todas_palabras).value_counts().head(10)
+            # Asegurar tipos
+            df["Fecha"] = pd.to_datetime(df["Fecha"], errors="coerce")
+            df["Likes"] = pd.to_numeric(df["Likes"], errors="coerce").fillna(0)
+            df["Retweets"] = pd.to_numeric(df["Retweets"], errors="coerce").fillna(0)
+            df["Interacción"] = df["Likes"] + df["Retweets"]
             
-            # --- Sentimiento simple (léxico)
-            positivas = set([
-                # Aprobación directa
-                "bueno","bien","positivo","excelente","correcto","adecuado","acertado","justo",
-                
-                # Progreso / avance
-                "avance","avanzar","mejora","mejorar","progreso","logro","logrado","resultado",
-                
-                # Confianza / esperanza
-                "confianza","esperanza","optimismo","tranquilidad","seguridad","estabilidad",
-                
-                # Gestión / política pública
-                "cumple","cumplió","eficiente","efectivo","funciona","solución","resuelve",
-                
-                # Legitimidad / respaldo
-                "apoyo","respaldo","legítimo","necesario","importante","prioritario",
-                
-                # Éxito / impacto
-                "exitoso","beneficio","beneficioso","impacto","positivo","histórico"
-            ])
-            
-            negativas = set([
-                # Rechazo directo
-                "malo","mal","negativo","pésimo","terrible","inaceptable","vergonzoso",
-                
-                # Crisis / conflicto
-                "crisis","conflicto","caos","problema","grave","colapso","fracaso",
-                
-                # Desconfianza / enojo
-                "indignación","enojo","rabia","molestia","hartazgo","descontento",
-                
-                # Gestión deficiente
-                "ineficiente","incapaz","incompetente","error","fallo","improvisación",
-                
-                # Corrupción / legitimidad
-                "corrupción","corrupto","ilegal","irregular","fraude","impunidad",
-                
-                # Miedo / riesgo
-                "peligro","amenaza","riesgo","inseguridad","violencia","abuso",
-                
-                # Protesta / rechazo social
-                "rechazo","repudio","protesta","denuncia","escándalo"
-            ])
-            
-            def calcular_sentimiento(texto):
-                palabras = limpiar_texto(texto)
-                pos = sum(1 for p in palabras if p in positivas)
-                neg = sum(1 for p in palabras if p in negativas)
-                if pos > neg:
-                    return "Positivo"
-                if neg > pos:
-                    return "Negativo"
-                return "Neutral"
-            
-            # 1) Intentamos con Hugging Face (IA)
-            sent_hf = []
-            score_hf = []
-            
-            for txt in df["Texto"].tolist():
-                s, sc = sentimiento_hf(txt)
-                sent_hf.append(s)
-                score_hf.append(sc)
-            
-            df["Sentimiento_HF"] = sent_hf
-            df["Score_HF"] = score_hf
-            
-            # 2) Si Hugging Face falla, usamos el plan B (léxico)
-            df["Sentimiento_Lex"] = df["Texto"].apply(calcular_sentimiento)
-            
-            # 3) Sentimiento final:
-            # - Si HF dio respuesta: usamos HF
-            # - Si HF no dio: usamos Lex
-            df["Sentimiento"] = df["Sentimiento_HF"].fillna(df["Sentimiento_Lex"])
-
-            # --- Métricas de temperatura
             total = len(df)
-            pct_pos = round((df["Sentimiento"] == "Positivo").mean() * 100, 1)
-            pct_neg = round((df["Sentimiento"] == "Negativo").mean() * 100, 1)
-            pct_neu = round((df["Sentimiento"] == "Neutral").mean() * 100, 1)
-
-            hf_ok = df["Sentimiento_HF"].notna().sum()
-            if hf_ok > 0:
-                metodo_sent = f"IA (Hugging Face) – {modelo_hf_id}"
-            else:
-                metodo_sent = "Léxico (fallback)"
+            pct_pos = round((df["Sentimiento"] == "Positivo").mean() * 100, 1) if total else 0
+            pct_neu = round((df["Sentimiento"] == "Neutral").mean() * 100, 1) if total else 0
+            pct_neg = round((df["Sentimiento"] == "Negativo").mean() * 100, 1) if total else 0
+            interaccion_total = int(df["Interacción"].sum()) if total else 0
+            interaccion_prom = round(df["Interacción"].mean(), 2) if total else 0
             
-            st.caption(f"Método de sentimiento: {metodo_sent}. IA clasificó {hf_ok}/{len(df)} textos. Score HF ≈ confianza (0–1).")
-
-            if pct_neg > 40:
+            # Narrativas dominantes (top términos)
+            todas_palabras = []
+            for t in df["Texto"].str.lower().tolist():
+                todas_palabras.extend(limpiar_texto(t))
+            top_terminos = pd.Series(todas_palabras).value_counts().head(15)
+            top_terminos_list = top_terminos.index.tolist()
+            narrativa_1 = top_terminos_list[0] if len(top_terminos_list) else "N/A"
+            
+            # Top post influyente
+            top_post = df.sort_values("Interacción", ascending=False).head(1)
+            if len(top_post) > 0:
+                top_autor = str(top_post.iloc[0].get("Autor", "N/A"))
+                top_int = int(top_post.iloc[0].get("Interacción", 0))
+            else:
+                top_autor, top_int = "N/A", 0
+            
+            # Temperatura (semáforo simple)
+            if pct_neg >= 40:
                 temperatura = "🔴 Riesgo reputacional"
-            elif pct_pos > 60:
+            elif pct_pos >= 60 and pct_neg < 25:
                 temperatura = "🟢 Clima favorable"
             else:
-                temperatura = "🟡 Clima mixto / neutro"
+                temperatura = "🟡 Mixto / neutro"
             
-            # --- Mostrar resumen ejecutivo
-            st.markdown("### 📌 Principales hallazgos")
+            # ─────────────────────────────
+            # 🧾 PANEL EJECUTIVO (KPI + Alertas)
+            # ─────────────────────────────
+            st.markdown("## 🧾 Panel ejecutivo")
             
-            st.markdown(f"""
-            - **Volumen analizado:** {total} publicaciones  
-            - **Temperatura del tema:** {temperatura}  
-            - **Distribución de sentimiento:**  
-              - Positivo: {pct_pos}%  
-              - Neutral: {pct_neu}%  
-              - Negativo: {pct_neg}%  
-            - **Narrativas dominantes:** {', '.join(top_palabras.index.tolist())}
-            """)
+            k1, k2, k3, k4, k5, k6 = st.columns(6)
+            k1.metric("Volumen", f"{total}")
+            k2.metric("Temperatura", temperatura)
+            k3.metric("% Negativo", f"{pct_neg}%")
+            k4.metric("Interacción", f"{interaccion_total}")
+            k5.metric("Top autor", top_autor)
+            k6.metric("Narrativa #1", narrativa_1)
             
-            # --- Riesgos y oportunidades
-            st.markdown("### ⚠️ Riesgos identificados")
-            if pct_neg > 30:
-                st.markdown("- Presencia relevante de mensajes negativos que podrían escalar si aumenta el volumen.")
-            else:
-                st.markdown("- No se identifican riesgos reputacionales significativos en el periodo analizado.")
-            
-            st.markdown("### 🌱 Oportunidades")
-            if pct_pos > pct_neg:
-                st.markdown("- Predominan mensajes favorables que pueden reforzarse con información clara y oportuna.")
-            else:
-                st.markdown("- Existe oportunidad de clarificar información y reducir ambigüedad en la conversación.")
-            
-            st.markdown("### 👀 Qué monitorear mañana")
-            st.markdown("""
-            - Evolución del volumen de publicaciones.
-            - Aparición de nuevos términos o hashtags.
-            - Cambios en la proporción de sentimiento negativo.
-            - Mayor actividad desde regiones específicas.
-            """)
-            
-            st.markdown("### ⚖️ Advertencia metodológica")
             st.caption(
-                "Este análisis se basa en publicaciones públicas de X, con inferencia aproximada de ubicación "
-                "y análisis automático de texto. No representa la opinión de la totalidad de la población "
-                "y debe interpretarse como una señal temprana, no como medición estadística."
+                f"Detalle rápido: Pos {pct_pos}% | Neu {pct_neu}% | Neg {pct_neg}%. "
+                f"Interacción promedio/post: {interaccion_prom}."
             )
-
+            
+            # Alertas (reglas MVP)
+            alertas = []
+            if pct_neg >= 40:
+                alertas.append("⚠️ Alto componente negativo. Priorizar aclaraciones con datos verificables y mensajes de contención.")
+            if interaccion_total >= 500 and total >= 10:
+                alertas.append("📣 Alta interacción total: posible amplificación/viralización. Vigilar fuentes y evolución del volumen.")
+            if alertas:
+                st.markdown("### 🚨 Alertas")
+                for a in alertas:
+                    st.warning(a)
+            
             # ─────────────────────────────
-            # 📊 GRÁFICOS (Plotly) – Dashboard Ejecutivo
+            # 🧠 RESUMEN EJECUTIVO (sin repetir números)
             # ─────────────────────────────
+            st.markdown("## 🧠 Resumen ejecutivo (accionable)")
+            
+            # Riesgos / oportunidades (reglas simples, sin repetir métricas)
+            riesgo_bullets = []
+            if pct_neg >= 40:
+                riesgo_bullets.append("Riesgo reputacional alto: conversación con tono negativo predominante.")
+            elif pct_neg >= 30:
+                riesgo_bullets.append("Riesgo reputacional moderado: presencia relevante de negativos que puede escalar con eventos gatillo.")
+            else:
+                riesgo_bullets.append("Riesgo reputacional bajo en el periodo observado, sin señales fuertes de escalamiento.")
+            
+            oportunidad_bullets = []
+            if pct_pos > pct_neg:
+                oportunidad_bullets.append("Clima con espacio para reforzar narrativa: responder con información clara, oportuna y verificable.")
+            else:
+                oportunidad_bullets.append("Oportunidad de aclaración: reducir ambigüedad con FAQ, cifras y vocería consistente.")
+            
+            # Mensajes sugeridos (framing informativo, no propaganda)
+            mensajes = [
+                "Mensaje sugerido: 'Compartimos información verificable y actualizada sobre el tema, con fuentes y fechas claras.'",
+                "Mensaje sugerido: 'Si tienes dudas, revisa este resumen: qué se sabe, qué no se sabe aún y próximos hitos.'",
+            ]
+            if pct_neg >= 30:
+                mensajes.append("Mensaje sugerido: 'Entendemos la preocupación. Aclaramos los puntos críticos y cómo se atenderán.'")
+            
+            # Qué monitorear mañana (operativo)
+            monitoreo = [
+                "Monitorear si aparece un nuevo hashtag o término dominante (cambio de agenda).",
+                "Monitorear si sube la proporción de negativos o se concentra en una narrativa específica.",
+                "Monitorear cuentas/post con alta interacción (posibles amplificadores).",
+                "Monitorear señales regionales (ubicación inferida) solo como indicio, no como dato duro.",
+            ]
+            
+            # Construir bullets (8–12)
+            bullets = []
+            bullets.append(f"Se detecta una conversación con narrativa dominante alrededor de: {', '.join(top_terminos_list[:6]) if top_terminos_list else 'sin términos dominantes claros'}.")
+            bullets.extend(riesgo_bullets)
+            bullets.extend(oportunidad_bullets)
+            bullets.extend(mensajes[:2])
+            bullets.append("Acción táctica: preparar 3 respuestas estándar (datos, procesos, próximos pasos) y mantener consistencia.")
+            bullets.append("Acción táctica: si el volumen aumenta, publicar una aclaración breve + enlace a información completa.")
+            bullets.extend(monitoreo[:3])
+            
+            # Mostrar en pantalla (máximo 12)
+            for b in bullets[:12]:
+                st.markdown(f"- {b}")
+            
+            # Advertencia metodológica (una sola vez, corta)
+            st.caption(
+                "Advertencia metodológica: señal temprana basada en publicaciones públicas de X; sentimiento automatizado (IA/fallback) "
+                "y ubicación inferida desde perfil/bio (no geolocalización exacta). No representa a toda la población."
+            )
+            
+            # ─────────────────────────────
+            # 📊 TABLERO VISUAL (Plotly)
+            # ─────────────────────────────
+            st.markdown("## 📊 Tablero visual")
+            
             if df["Fecha"].isna().all():
                 st.warning("No se pudo interpretar fechas para graficar tendencia.")
             else:
-                # tus gráficos
-                st.markdown("## 📊 Tablero Visual")
-                
-                # Asegurar tipos
-                df["Fecha"] = pd.to_datetime(df["Fecha"], errors="coerce")
-                
-                # Crear columna de día para tendencias
                 df["Día"] = df["Fecha"].dt.date.astype(str)
-                
+            
                 # 1) Volumen por día
                 vol_por_dia = df.groupby("Día").size().reset_index(name="Volumen")
-                
-                fig_vol = px.line(
-                    vol_por_dia,
-                    x="Día",
-                    y="Volumen",
-                    markers=True,
-                    title="Volumen de publicaciones por día"
-                )
+                fig_vol = px.line(vol_por_dia, x="Día", y="Volumen", markers=True, title="Volumen de publicaciones por día")
                 st.plotly_chart(fig_vol, use_container_width=True)
-                
-                # 2) Distribución de sentimiento (donut)
+            
+                # 2) Sentimiento (donut)
                 sent_counts = df["Sentimiento"].value_counts().reset_index()
                 sent_counts.columns = ["Sentimiento", "Cantidad"]
-                
-                fig_sent = px.pie(
-                    sent_counts,
-                    names="Sentimiento",
-                    values="Cantidad",
-                    hole=0.45,
-                    title="Distribución de sentimiento (IA + fallback)"
-                )
+                fig_sent = px.pie(sent_counts, names="Sentimiento", values="Cantidad", hole=0.45, title="Distribución de sentimiento")
                 st.plotly_chart(fig_sent, use_container_width=True)
-                
-                # 3) Sentimiento por día (barras apiladas)
+            
+                # 3) Sentimiento por día (apilado)
                 sent_por_dia = df.groupby(["Día", "Sentimiento"]).size().reset_index(name="Cantidad")
-                
                 fig_sent_dia = px.bar(
-                    sent_por_dia,
-                    x="Día",
-                    y="Cantidad",
-                    color="Sentimiento",
-                    barmode="stack",
-                    title="Sentimiento por día (barras apiladas)"
+                    sent_por_dia, x="Día", y="Cantidad", color="Sentimiento",
+                    barmode="stack", title="Sentimiento por día (barras apiladas)"
                 )
                 st.plotly_chart(fig_sent_dia, use_container_width=True)
-                
-                # 4) Top términos (narrativas dominantes)
-                # Usamos tu función limpiar_texto y stopwords ya definidas arriba
-                todas_palabras = []
-                for t in df["Texto"].str.lower().tolist():
-                    todas_palabras.extend(limpiar_texto(t))
-                
-                top_terminos = pd.Series(todas_palabras).value_counts().head(15).reset_index()
-                top_terminos.columns = ["Término", "Frecuencia"]
-                
+            
+                # 4) Top términos
+                top_terminos_df = top_terminos.reset_index()
+                top_terminos_df.columns = ["Término", "Frecuencia"]
                 fig_terms = px.bar(
-                    top_terminos,
-                    x="Frecuencia",
-                    y="Término",
-                    orientation="h",
-                    title="Top 15 términos dominantes (limpio de stopwords)"
+                    top_terminos_df, x="Frecuencia", y="Término", orientation="h",
+                    title="Top términos dominantes (limpio de stopwords)"
                 )
                 st.plotly_chart(fig_terms, use_container_width=True)
-                
-                # 5) Top posts por interacción (tabla)
-                df["Interacción"] = df["Likes"].fillna(0) + df["Retweets"].fillna(0)
-                top_posts = df.sort_values("Interacción", ascending=False).head(10)
-                
-                st.markdown("### 🔥 Top 10 posts por interacción (Likes + Retweets)")
-                top_posts = top_posts.copy()
-                top_posts["Link"] = top_posts["URL"].apply(lambda u: f'<a href="{u}" target="_blank">Abrir</a>' if u else "")
-    
+            
+            # ─────────────────────────────
+            # 🔥 TOP POSTS + DETALLE (compacto)
+            # ─────────────────────────────
+            
+            # Top 10 posts por interacción
+            top_posts = df.sort_values("Interacción", ascending=False).head(10).copy()
+            top_posts["Link"] = top_posts["URL"].apply(lambda u: f'<a href="{u}" target="_blank">Abrir</a>' if u else "")
+            
+            st.markdown("### 🔥 Top 10 posts por interacción (Likes + Retweets)")
+            st.markdown(
+                top_posts[["Autor", "Fecha", "Likes", "Retweets", "Interacción", "Texto", "Link"]]
+                .to_html(escape=False, index=False),
+                unsafe_allow_html=True
+            )
+            
+            # Tabla completa en expander (optimiza espacio)
+            with st.expander("📄 Ver tabla completa de resultados (detalle)"):
+                df_full = df.copy()
+                df_full["Link"] = df_full["URL"].apply(lambda u: f'<a href="{u}" target="_blank">Abrir</a>' if u else "")
                 st.markdown(
-                    top_posts[["Autor", "Fecha", "Likes", "Retweets", "Interacción", "Texto", "Link"]].to_html(escape=False, index=False),
+                    df_full[["Autor", "Fecha", "Likes", "Retweets", "Sentimiento", "Ubicación inferida", "Confianza", "Texto", "Link"]]
+                    .to_html(escape=False, index=False),
                     unsafe_allow_html=True
                 )
+
 
 
 
