@@ -476,7 +476,7 @@ if st.button("Buscar en X"):
             top_posts = top_posts.copy()
             top_posts["Link"] = top_posts["URL"].apply(lambda u: f'<a href="{u}" target="_blank">Abrir</a>' if u else "")
 
-           st.markdown(
+            st.markdown(
                 top_posts[["Autor", "Fecha", "Likes", "Retweets", "Interacción", "Texto", "Link"]].to_html(escape=False, index=False),
                 unsafe_allow_html=True
             )
