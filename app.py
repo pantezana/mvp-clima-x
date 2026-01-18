@@ -407,83 +407,82 @@ if st.button("Buscar en X"):
                 st.warning("No se pudo interpretar fechas para graficar tendencia.")
             else:
                 # tus gráficos
-
-            st.markdown("## 📊 Tablero Visual")
-            
-            # Asegurar tipos
-            df["Fecha"] = pd.to_datetime(df["Fecha"], errors="coerce")
-            
-            # Crear columna de día para tendencias
-            df["Día"] = df["Fecha"].dt.date.astype(str)
-            
-            # 1) Volumen por día
-            vol_por_dia = df.groupby("Día").size().reset_index(name="Volumen")
-            
-            fig_vol = px.line(
-                vol_por_dia,
-                x="Día",
-                y="Volumen",
-                markers=True,
-                title="Volumen de publicaciones por día"
-            )
-            st.plotly_chart(fig_vol, use_container_width=True)
-            
-            # 2) Distribución de sentimiento (donut)
-            sent_counts = df["Sentimiento"].value_counts().reset_index()
-            sent_counts.columns = ["Sentimiento", "Cantidad"]
-            
-            fig_sent = px.pie(
-                sent_counts,
-                names="Sentimiento",
-                values="Cantidad",
-                hole=0.45,
-                title="Distribución de sentimiento (IA + fallback)"
-            )
-            st.plotly_chart(fig_sent, use_container_width=True)
-            
-            # 3) Sentimiento por día (barras apiladas)
-            sent_por_dia = df.groupby(["Día", "Sentimiento"]).size().reset_index(name="Cantidad")
-            
-            fig_sent_dia = px.bar(
-                sent_por_dia,
-                x="Día",
-                y="Cantidad",
-                color="Sentimiento",
-                barmode="stack",
-                title="Sentimiento por día (barras apiladas)"
-            )
-            st.plotly_chart(fig_sent_dia, use_container_width=True)
-            
-            # 4) Top términos (narrativas dominantes)
-            # Usamos tu función limpiar_texto y stopwords ya definidas arriba
-            todas_palabras = []
-            for t in df["Texto"].str.lower().tolist():
-                todas_palabras.extend(limpiar_texto(t))
-            
-            top_terminos = pd.Series(todas_palabras).value_counts().head(15).reset_index()
-            top_terminos.columns = ["Término", "Frecuencia"]
-            
-            fig_terms = px.bar(
-                top_terminos,
-                x="Frecuencia",
-                y="Término",
-                orientation="h",
-                title="Top 15 términos dominantes (limpio de stopwords)"
-            )
-            st.plotly_chart(fig_terms, use_container_width=True)
-            
-            # 5) Top posts por interacción (tabla)
-            df["Interacción"] = df["Likes"].fillna(0) + df["Retweets"].fillna(0)
-            top_posts = df.sort_values("Interacción", ascending=False).head(10)
-            
-            st.markdown("### 🔥 Top 10 posts por interacción (Likes + Retweets)")
-            top_posts = top_posts.copy()
-            top_posts["Link"] = top_posts["URL"].apply(lambda u: f'<a href="{u}" target="_blank">Abrir</a>' if u else "")
-
-            st.markdown(
-                top_posts[["Autor", "Fecha", "Likes", "Retweets", "Interacción", "Texto", "Link"]].to_html(escape=False, index=False),
-                unsafe_allow_html=True
-            )
+                st.markdown("## 📊 Tablero Visual")
+                
+                # Asegurar tipos
+                df["Fecha"] = pd.to_datetime(df["Fecha"], errors="coerce")
+                
+                # Crear columna de día para tendencias
+                df["Día"] = df["Fecha"].dt.date.astype(str)
+                
+                # 1) Volumen por día
+                vol_por_dia = df.groupby("Día").size().reset_index(name="Volumen")
+                
+                fig_vol = px.line(
+                    vol_por_dia,
+                    x="Día",
+                    y="Volumen",
+                    markers=True,
+                    title="Volumen de publicaciones por día"
+                )
+                st.plotly_chart(fig_vol, use_container_width=True)
+                
+                # 2) Distribución de sentimiento (donut)
+                sent_counts = df["Sentimiento"].value_counts().reset_index()
+                sent_counts.columns = ["Sentimiento", "Cantidad"]
+                
+                fig_sent = px.pie(
+                    sent_counts,
+                    names="Sentimiento",
+                    values="Cantidad",
+                    hole=0.45,
+                    title="Distribución de sentimiento (IA + fallback)"
+                )
+                st.plotly_chart(fig_sent, use_container_width=True)
+                
+                # 3) Sentimiento por día (barras apiladas)
+                sent_por_dia = df.groupby(["Día", "Sentimiento"]).size().reset_index(name="Cantidad")
+                
+                fig_sent_dia = px.bar(
+                    sent_por_dia,
+                    x="Día",
+                    y="Cantidad",
+                    color="Sentimiento",
+                    barmode="stack",
+                    title="Sentimiento por día (barras apiladas)"
+                )
+                st.plotly_chart(fig_sent_dia, use_container_width=True)
+                
+                # 4) Top términos (narrativas dominantes)
+                # Usamos tu función limpiar_texto y stopwords ya definidas arriba
+                todas_palabras = []
+                for t in df["Texto"].str.lower().tolist():
+                    todas_palabras.extend(limpiar_texto(t))
+                
+                top_terminos = pd.Series(todas_palabras).value_counts().head(15).reset_index()
+                top_terminos.columns = ["Término", "Frecuencia"]
+                
+                fig_terms = px.bar(
+                    top_terminos,
+                    x="Frecuencia",
+                    y="Término",
+                    orientation="h",
+                    title="Top 15 términos dominantes (limpio de stopwords)"
+                )
+                st.plotly_chart(fig_terms, use_container_width=True)
+                
+                # 5) Top posts por interacción (tabla)
+                df["Interacción"] = df["Likes"].fillna(0) + df["Retweets"].fillna(0)
+                top_posts = df.sort_values("Interacción", ascending=False).head(10)
+                
+                st.markdown("### 🔥 Top 10 posts por interacción (Likes + Retweets)")
+                top_posts = top_posts.copy()
+                top_posts["Link"] = top_posts["URL"].apply(lambda u: f'<a href="{u}" target="_blank">Abrir</a>' if u else "")
+    
+                st.markdown(
+                    top_posts[["Autor", "Fecha", "Likes", "Retweets", "Interacción", "Texto", "Link"]].to_html(escape=False, index=False),
+                    unsafe_allow_html=True
+                )
 
 
 
