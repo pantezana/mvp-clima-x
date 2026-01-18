@@ -244,7 +244,6 @@ if st.button("Buscar en X"):
             st.markdown("## 🧠 Resumen Ejecutivo Automático")
             
             # --- Preparación de texto
-            textos = df["Texto"].str.lower()
             
             # Stopwords básicas en español (MVP)
             stopwords = set([
@@ -256,6 +255,84 @@ if st.button("Buscar en X"):
             def limpiar_texto(texto):
                 palabras = re.findall(r"\b[a-záéíóúñ]+\b", texto)
                 return [p for p in palabras if p not in stopwords and len(p) > 3]
+
+               # --- Sentimiento simple (léxico)
+            positivas = set([
+                # Aprobación directa
+                "bueno","bien","positivo","excelente","correcto","adecuado","acertado","justo",
+                
+                # Progreso / avance
+                "avance","avanzar","mejora","mejorar","progreso","logro","logrado","resultado",
+                
+                # Confianza / esperanza
+                "confianza","esperanza","optimismo","tranquilidad","seguridad","estabilidad",
+                
+                # Gestión / política pública
+                "cumple","cumplió","eficiente","efectivo","funciona","solución","resuelve",
+                
+                # Legitimidad / respaldo
+                "apoyo","respaldo","legítimo","necesario","importante","prioritario",
+                
+                # Éxito / impacto
+                "exitoso","beneficio","beneficioso","impacto","positivo","histórico"
+            ])
+            
+            negativas = set([
+                # Rechazo directo
+                "malo","mal","negativo","pésimo","terrible","inaceptable","vergonzoso",
+                
+                # Crisis / conflicto
+                "crisis","conflicto","caos","problema","grave","colapso","fracaso",
+                
+                # Desconfianza / enojo
+                "indignación","enojo","rabia","molestia","hartazgo","descontento",
+                
+                # Gestión deficiente
+                "ineficiente","incapaz","incompetente","error","fallo","improvisación",
+                
+                # Corrupción / legitimidad
+                "corrupción","corrupto","ilegal","irregular","fraude","impunidad",
+                
+                # Miedo / riesgo
+                "peligro","amenaza","riesgo","inseguridad","violencia","abuso",
+                
+                # Protesta / rechazo social
+                "rechazo","repudio","protesta","denuncia","escándalo"
+            ])
+            
+            def calcular_sentimiento(texto):
+                palabras = limpiar_texto(texto)
+                pos = sum(1 for p in palabras if p in positivas)
+                neg = sum(1 for p in palabras if p in negativas)
+                if pos > neg:
+                    return "Positivo"
+                if neg > pos:
+                    return "Negativo"
+                return "Neutral"
+            
+            # 1) Intentamos con Hugging Face (IA)
+            sent_hf = []
+            score_hf = []
+            
+            for txt in df["Texto"].tolist():
+                s, sc = sentimiento_hf(txt)
+                sent_hf.append(s)
+                score_hf.append(sc)
+            
+            df["Sentimiento_HF"] = sent_hf
+            df["Score_HF"] = score_hf
+            
+            # 2) Si Hugging Face falla, usamos el plan B (léxico)
+            df["Sentimiento_Lex"] = df["Texto"].apply(calcular_sentimiento)
+            
+            # 3) Sentimiento final:
+            # - Si HF dio respuesta: usamos HF
+            # - Si HF no dio: usamos Lex
+            df["Sentimiento"] = df["Sentimiento_HF"].fillna(df["Sentimiento_Lex"])
+
+            # Informar método usado
+            metodo_sent = "IA (Hugging Face)" if df["Sentimiento_HF"].notna().any() else "Léxico (fallback)"
+            st.caption(f"Método de sentimiento: {metodo_sent}. Score HF (0–1) es confianza aproximada cuando hay IA.")
             
             # ============================================================
             # ✅ BLOQUE UNIFICADO (KPI + Resumen ejecutivo + Gráficos + Tabla)
