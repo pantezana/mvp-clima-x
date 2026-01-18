@@ -403,7 +403,11 @@ if st.button("Buscar en X"):
             # ─────────────────────────────
             # 📊 GRÁFICOS (Plotly) – Dashboard Ejecutivo
             # ─────────────────────────────
-            
+            if df["Fecha"].isna().all():
+                st.warning("No se pudo interpretar fechas para graficar tendencia.")
+            else:
+                # tus gráficos
+
             st.markdown("## 📊 Tablero Visual")
             
             # Asegurar tipos
