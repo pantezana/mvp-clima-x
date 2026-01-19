@@ -229,7 +229,7 @@ def resumen_ejecutivo_gemini(payload: dict, debug: bool = False):
         "\"nota_metodologica\":\"...\""
         "}\n"
         "Reglas:\n"
-        "- bullets: 8 a 12, concretos y accionables.\n"
+        f"- Si volumen < 8: bullets 4 a 6.\n- Si volumen >= 8: bullets 8 a 12.\n"
         "- Incluir: narrativas, riesgos, oportunidades, mensajes informativos, monitoreo mañana.\n"
         "- No inventar datos.\n"
         f"INSUMOS:{payload_json}"
@@ -288,11 +288,12 @@ def resumen_ejecutivo_gemini(payload: dict, debug: bool = False):
     bullets = bullets[:12]
 
     # Si hay muy pocos datos, Gemini puede devolver pocos bullets
-    if len(bullets) < 5:
-        return None, "Gemini: salida demasiado corta (muestra pequeña o respuesta pobre)"
+
+    min_bullets = 4 if payload.get("volumen", 0) < 8 else 8
+    if len(bullets) < min_bullets:
+        return None, "Gemini: salida insuficiente para el volumen"
 
     return bullets, "Gemini OK (JSON)"
-
 
 if "last_search_ts" not in st.session_state:
     st.session_state["last_search_ts"] = 0
