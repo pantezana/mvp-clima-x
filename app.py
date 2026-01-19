@@ -158,10 +158,6 @@ def sentimiento_hf(texto: str):
     except Exception:
         return None, None
 
-import json
-import re
-import requests
-
 def _extract_gemini_text(data: dict) -> str:
     """Concatena todas las parts text para evitar respuestas partidas."""
     try:
@@ -205,9 +201,9 @@ def resumen_ejecutivo_gemini(payload: dict, debug: bool = False):
     if not api_key:
         return None, "Gemini: falta GEMINI_API_KEY en secrets"
 
-    model = "gemini-3-flash-preview"
-    url = f"https://generativelanguage.googleapis.com/v1beta/models/{model}:generateContent"
-    headers = {"Content-Type": "application/json", "x-goog-api-key": api_key}
+    model = "gemini-2.5-flash"
+    
+    url = f"https://generativelanguage.googleapis.com/v1beta/models/{model}:generateContent?key={api_key}"
 
     payload_json = json.dumps(payload, ensure_ascii=False)
 
