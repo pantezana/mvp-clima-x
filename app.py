@@ -217,92 +217,89 @@ def resumen_ejecutivo_gemini(payload: dict, debug: bool = False):
     url = f"https://generativelanguage.googleapis.com/v1beta/models/{model}:generateContent?key={api_key}"
     headers = {"Content-Type": "application/json"}
 
-    # ✅ Prompt simple (NO forces JSON aquí)
-    # El JSON lo forza el schema.
-    payload_json = json.dumps(payload, ensure_ascii=False)
-
-    prompt = (
-        "Eres un analista senior de clima social para toma de decisiones. No hagas propaganda.\n"
-        "Genera un resumen ejecutivo accionable con:\n"
-        "- Narrativas dominantes\n"
-        "- Riesgos\n"
-        "- Oportunidades\n"
-        "- Mensajes sugeridos (informativos, no propaganda)\n"
-        "- Qué monitorear mañana\n"
-        "- Advertencia metodológica (1 línea)\n\n"
-        "Reglas: No inventes datos. Si falta info, dilo.\n\n"
-        f"INSUMOS (JSON):\n{payload_json}"
-    )
-
-    # ✅ JSON Schema (Structured Output)
+    # ✅ JSON Schema: obliga a devolver bullets como LISTA (8..12) + nota metodológica
     schema = {
         "type": "object",
         "properties": {
             "bullets": {
                 "type": "array",
-                "items": {"type": "string"},
                 "minItems": 8,
                 "maxItems": 12,
-                "description": "Lista de 8 a 12 bullets accionables y concretos."
+                "items": {"type": "string"}
             },
-            "nota_metodologica": {
-                "type": "string",
-                "description": "1 línea de advertencia metodológica."
-            }
+            "nota_metodologica": {"type": "string"}
         },
         "required": ["bullets", "nota_metodologica"],
         "additionalProperties": False
     }
 
+    # Prompt corto (ya NO pedimos "devuelve JSON", eso lo hace el schema)
+    prompt = (
+        "Eres analista senior de clima social para toma de decisiones. No hagas propaganda.\n"
+        "Con los INSUMOS (JSON) redacta:\n"
+        "- 8 a 12 bullets accionables (narrativas, riesgos, oportunidades, mensajes sugeridos informativos, qué monitorear mañana)\n"
+        "- 1 nota metodológica breve.\n"
+        "Reglas: no inventes datos; si falta info, dilo.\n"
+        f"INSUMOS (JSON): {json.dumps(payload, ensure_ascii=False)}"
+    )
+
     body = {
         "contents": [{"parts": [{"text": prompt}]}],
         "generationConfig": {
-            "temperature": 0.2,
-            "maxOutputTokens": 450,
-            # 🔥 Lo importante:
+            # ✅ ESTA es la clave
             "responseMimeType": "application/json",
-            "responseJsonSchema": schema
+            "responseJsonSchema": schema,
+
+            # ✅ Dale aire para que complete (tu error era truncamiento)
+            "temperature": 0.2,
+            "maxOutputTokens": 700
         }
     }
 
     try:
-        r = requests.post(url, headers=headers, json=body, timeout=30)
+        r = requests.post(url, headers=headers, json=body, timeout=35)
         if r.status_code != 200:
-            if debug:
-                return None, f"Gemini ERROR {r.status_code}: {r.text[:800]}"
-            return None, f"Gemini ERROR {r.status_code}"
+            return None, f"Gemini ERROR {r.status_code}: {r.text[:200]}"
 
         data = r.json()
 
-        # Extraer texto (ahora debe ser JSON string válido)
-        text = _extract_gemini_text(data)
+        # Debug: finishReason + texto crudo
+        finish = ""
+        raw_text = ""
+        try:
+            cand0 = data.get("candidates", [])[0]
+            finish = cand0.get("finishReason", "")
+            raw_text = cand0.get("content", {}).get("parts", [{}])[0].get("text", "")
+        except Exception:
+            pass
 
         if debug:
-            st.text_area("DEBUG: Respuesta cruda de Gemini (debe ser JSON)", value=text, height=220)
-            # Opcional: ver finishReason si existe
-            try:
-                fr = data.get("candidates", [])[0].get("finishReason", "")
-                st.caption(f"DEBUG: finishReason = {fr}")
-            except Exception:
-                pass
+            st.text_area("DEBUG: Gemini raw text (JSON)", value=raw_text, height=180)
+            st.caption(f"DEBUG: finishReason = {finish or 'N/A'}")
 
-        # Parsear JSON directo (debe funcionar en modo estructurado)
-        obj = json.loads(text)
+        if not raw_text:
+            return None, "Gemini: respuesta vacía"
+
+        # ✅ Aquí raw_text YA DEBE ser JSON válido (por schema)
+        obj = json.loads(raw_text)
 
         bullets = obj.get("bullets", [])
         nota = obj.get("nota_metodologica", "")
 
-        if not isinstance(bullets, list) or len(bullets) < 6:
-            return None, "Gemini: salida pobre / bullets insuficientes"
+        if not isinstance(bullets, list) or len(bullets) < 8:
+            return None, "Gemini: bullets insuficientes (muestra muy chica o mala salida)"
 
         bullets = [str(b).strip() for b in bullets if str(b).strip()]
-        if nota and isinstance(nota, str) and nota.strip():
-            bullets.append(f"Advertencia metodológica: {nota.strip()}")
+        nota = (nota or "").strip()
+
+        # (Opcional) anexar la nota como último bullet
+        if nota:
+            bullets = bullets[:11] + [f"Advertencia metodológica: {nota}"]
 
         return bullets[:12], "Gemini OK (Structured JSON)"
 
     except Exception as e:
-        return None, f"Gemini: excepción parseando JSON ({type(e).__name__})"
+        return None, f"Gemini: excepción ({type(e).__name__})"
 
 if "last_search_ts" not in st.session_state:
     st.session_state["last_search_ts"] = 0
@@ -550,8 +547,15 @@ if st.button("Buscar en X"):
                 "ejemplos_top_interaccion": ejemplos,
                 "nota_ubicacion": "Ubicación inferida desde perfil/bio; no es geolocalización exacta."
             }
-            
-            bullets_ia, gemini_status = resumen_ejecutivo_gemini(payload, debug=debug_gemini)
+
+            # ✅ Regla simple: si hay muy pocos posts, Gemini suele dar salida pobre.
+            # En ese caso saltamos directo al resumen por reglas.
+            if total < 8:
+                bullets_ia = None
+                gemini_status = "Gemini: muestra muy chica (<8). Usando resumen por reglas."
+            else:
+                bullets_ia, gemini_status = resumen_ejecutivo_gemini(payload, debug=debug_gemini)
+
             st.caption(gemini_status)
             
             # ─────────────────────────────
