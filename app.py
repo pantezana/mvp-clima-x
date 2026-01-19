@@ -23,7 +23,8 @@ time_range = st.selectbox(
     "Rango temporal",
     ["24 horas", "7 días", "30 días"]
 )
-debug_gemini = st.checkbox("Debug Gemini (mostrar errores)", value=False)
+
+debug_gemini = st.checkbox("Debug Gemini", value=False)
 
 # ─────────────────────────────
 # Selector de modelo de sentimiento (Hugging Face)
@@ -157,116 +158,126 @@ def sentimiento_hf(texto: str):
     except Exception:
         return None, None
 
-def resumen_ejecutivo_gemini(payload: dict, debug: bool = False):
-    """
-    Devuelve (bullets, status_info)
-    bullets: lista de 8–12 strings o None
-    """
-    api_key = st.secrets.get("GEMINI_API_KEY", "")
-    if not api_key:
-        return None, "Gemini: sin GEMINI_API_KEY en secrets"
+import json
+import re
+import requests
 
-    model = "gemini-3-flash-preview"
-    url = f"https://generativelanguage.googleapis.com/v1beta/models/{model}:generateContent"
-
-    # 👇 Pedimos JSON ESTRICTO
-    prompt = f"""
-Eres un analista senior de clima social para toma de decisiones (no propaganda).
-Devuelve SOLO un JSON válido (sin markdown, sin texto extra) con esta estructura EXACTA:
-
-{{
-  "bullets": [
-    "bullet 1",
-    "...",
-    "bullet 8 a 12"
-  ],
-  "nota_metodologica": "1 línea"
-}}
-
-Reglas:
-- 8 a 12 bullets, accionables y concretos.
-- No inventes datos.
-- Usa únicamente los insumos.
-- Incluye: narrativas dominantes, riesgos, oportunidades, mensajes sugeridos (informativos), qué monitorear mañana.
-
-INSUMOS (JSON):
-{payload}
-""".strip()
-
-    body = {
-        "contents": [{"parts": [{"text": prompt}]}],
-        "generationConfig": {"temperature": 0.3, "maxOutputTokens": 450}
-    }
-    headers = {"Content-Type": "application/json", "x-goog-api-key": api_key}
-
+def _extract_gemini_text(data: dict) -> str:
+    """Concatena todas las parts text para evitar respuestas partidas."""
     try:
-        r = requests.post(url, headers=headers, json=body, timeout=30)
-        if r.status_code != 200:
-            if debug:
-                return None, f"Gemini ERROR {r.status_code}: {r.text[:600]}"
-            return None, f"Gemini ERROR {r.status_code}"
+        cand = data.get("candidates", [])[0]
+        parts = cand.get("content", {}).get("parts", [])
+        texts = []
+        for p in parts:
+            t = p.get("text", "")
+            if t:
+                texts.append(t)
+        return "\n".join(texts).strip()
+    except Exception:
+        return ""
 
-        data = r.json()
-        text = (
-            data.get("candidates", [{}])[0]
-                .get("content", {})
-                .get("parts", [{}])[0]
-                .get("text", "")
-        ).strip()
+def _try_parse_json(text: str):
+    """Intenta parsear JSON directo o JSON embebido."""
+    text = text.strip()
 
-        if debug:
-            st.text_area("DEBUG: Respuesta cruda de Gemini", value=text, height=180)
+    # 1) JSON directo
+    try:
+        return json.loads(text)
+    except Exception:
+        pass
 
-        if not text:
-            return None, "Gemini: respuesta vacía"
-
-        # 1) Intento: JSON directo
+    # 2) JSON dentro del texto
+    m = re.search(r"\{.*\}", text, re.DOTALL)
+    if m:
         try:
-            obj = json.loads(text)
-            bullets = obj.get("bullets", [])
-            nota = obj.get("nota_metodologica", "")
-            bullets = [b.strip() for b in bullets if isinstance(b, str) and b.strip()]
-            if nota and isinstance(nota, str):
-                bullets.append(f"Advertencia metodológica: {nota.strip()}")
-            return bullets[:12], "Gemini OK (JSON)"
+            return json.loads(m.group(0))
         except Exception:
             pass
 
-        # 2) Intento: JSON dentro de un bloque (por si Gemini lo envolvió)
-        m = re.search(r"\{.*\}", text, re.DOTALL)
-        if m:
-            candidate = m.group(0)
-            try:
-                obj = json.loads(candidate)
-                bullets = obj.get("bullets", [])
-                nota = obj.get("nota_metodologica", "")
-                bullets = [b.strip() for b in bullets if isinstance(b, str) and b.strip()]
-                if nota and isinstance(nota, str):
-                    bullets.append(f"Advertencia metodológica: {nota.strip()}")
-                return bullets[:12], "Gemini OK (JSON extraído)"
-            except Exception:
-                pass
+    return None
 
-        # 3) Fallback: parser robusto a texto libre
-        lines = [l.strip() for l in text.splitlines() if l.strip()]
-        bullets = []
-        for l in lines:
-            # quitar markdown
-            l = re.sub(r"^\*\*|\*\*$", "", l).strip()
-            l = re.sub(r"^[-•\d\)\.]+\s*", "", l).strip()
-            if len(l) >= 8:
-                bullets.append(l)
-        bullets = bullets[:12]
-        if bullets:
-            return bullets, "Gemini OK (texto libre, parseado)"
-        return None, "Gemini: no se pudieron extraer bullets"
+def resumen_ejecutivo_gemini(payload: dict, debug: bool = False):
+    """
+    Retorna: (bullets_list, status_str)
+    bullets_list: lista (8-12) o None
+    """
+    api_key = st.secrets.get("GEMINI_API_KEY", "")
+    if not api_key:
+        return None, "Gemini: falta GEMINI_API_KEY en secrets"
 
-    except Exception as e:
+    model = "gemini-3-flash-preview"
+    url = f"https://generativelanguage.googleapis.com/v1beta/models/{model}:generateContent"
+    headers = {"Content-Type": "application/json", "x-goog-api-key": api_key}
+
+    payload_json = json.dumps(payload, ensure_ascii=False)
+
+    prompt = (
+        "Devuelve SOLO un JSON válido (sin markdown, sin texto extra) con esta estructura EXACTA:\n"
+        "{\n"
+        '  "bullets": ["... 8 a 12 bullets ..."],\n'
+        '  "nota_metodologica": "1 línea"\n'
+        "}\n\n"
+        "Reglas:\n"
+        "- 8 a 12 bullets, accionables y concretos.\n"
+        "- No inventes datos. Usa solo los INSUMOS.\n"
+        "- Incluye: narrativas dominantes, riesgos, oportunidades, mensajes sugeridos (informativos), qué monitorear mañana.\n\n"
+        f"INSUMOS (JSON):\n{payload_json}"
+    )
+
+    def _call(max_tokens: int):
+        body = {
+            "contents": [{"parts": [{"text": prompt}]}],
+            "generationConfig": {"temperature": 0.2, "maxOutputTokens": max_tokens}
+        }
+        r = requests.post(url, headers=headers, json=body, timeout=30)
+        return r
+
+    # 1er intento
+    r = _call(280)
+    if r.status_code != 200:
         if debug:
-            return None, f"Gemini EXCEPTION: {type(e).__name__}: {str(e)[:300]}"
-        return None, f"Gemini EXCEPTION: {type(e).__name__}"
+            return None, f"Gemini ERROR {r.status_code}: {r.text[:600]}"
+        return None, f"Gemini ERROR {r.status_code}"
 
+    data = r.json()
+    text = _extract_gemini_text(data)
 
+    if debug:
+        st.text_area("DEBUG: Respuesta cruda de Gemini", value=text, height=200)
+
+    obj = _try_parse_json(text)
+
+    # Si falla, reintenta 1 vez (a veces viene incompleto)
+    if obj is None:
+        r2 = _call(220)
+        if r2.status_code == 200:
+            data2 = r2.json()
+            text2 = _extract_gemini_text(data2)
+            if debug:
+                st.text_area("DEBUG: Respuesta cruda de Gemini (reintento)", value=text2, height=200)
+            obj = _try_parse_json(text2)
+            if obj is not None:
+                text = text2  # para status
+
+    if obj is None:
+        return None, "Gemini: respuesta no parseable (incompleta o sin JSON)"
+
+    bullets = obj.get("bullets", [])
+    nota = obj.get("nota_metodologica", "")
+
+    if not isinstance(bullets, list):
+        return None, "Gemini: JSON sin bullets[]"
+    bullets = [str(b).strip() for b in bullets if str(b).strip()]
+
+    if nota and isinstance(nota, str) and nota.strip():
+        bullets.append(f"Advertencia metodológica: {nota.strip()}")
+
+    # Asegurar 8–12
+    bullets = bullets[:12]
+    if len(bullets) < 6:
+        return None, "Gemini: bullets insuficientes (muestra chica o salida pobre)"
+
+    return bullets, "Gemini OK (JSON)"
 
 if "last_search_ts" not in st.session_state:
     st.session_state["last_search_ts"] = 0
