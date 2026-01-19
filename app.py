@@ -159,7 +159,7 @@ def sentimiento_hf(texto: str):
         return None, None
 
 def _extract_gemini_text(data: dict) -> str:
-    """Concatena todas las parts text para evitar respuestas partidas."""
+    """Concatena todas las parts text."""
     try:
         cand = data.get("candidates", [])[0]
         parts = cand.get("content", {}).get("parts", [])
@@ -172,17 +172,29 @@ def _extract_gemini_text(data: dict) -> str:
     except Exception:
         return ""
 
-def _try_parse_json(text: str):
-    """Intenta parsear JSON directo o JSON embebido."""
+def _strip_code_fences(text: str) -> str:
+    """Quita ```json ... ``` o ``` ... ``` si existen."""
     text = text.strip()
+    # Quitar bloque inicial ```xxx
+    text = re.sub(r"^```[a-zA-Z0-9_-]*\s*", "", text)
+    # Quitar cierre ```
+    text = re.sub(r"\s*```$", "", text)
+    return text.strip()
 
-    # 1) JSON directo
+def _try_parse_json(text: str):
+    """Intenta parsear JSON incluso si viene envuelto en texto."""
+    if not text:
+        return None
+
+    text = _strip_code_fences(text)
+
+    # 1) Intento directo
     try:
         return json.loads(text)
     except Exception:
         pass
 
-    # 2) JSON dentro del texto
+    # 2) Intento: extraer el primer bloque { ... }
     m = re.search(r"\{.*\}", text, re.DOTALL)
     if m:
         try:
@@ -203,77 +215,84 @@ def resumen_ejecutivo_gemini(payload: dict, debug: bool = False):
 
     model = "gemini-2.5-flash"
     url = f"https://generativelanguage.googleapis.com/v1beta/models/{model}:generateContent?key={api_key}"
-    headers = {"Content-Type": "application/json", "x-goog-api-key": api_key}
+    headers = {"Content-Type": "application/json"}
 
-    payload_json = json.dumps(payload, ensure_ascii=False)
+    # JSON compacto para que el prompt sea más “limpio”
+    payload_json = json.dumps(payload, ensure_ascii=False, separators=(",", ":"))
 
+    # Prompt más estricto (y más corto)
     prompt = (
-        "Devuelve SOLO un JSON válido (sin markdown, sin texto extra) con esta estructura EXACTA:\n"
-        "{\n"
-        '  "bullets": ["... 8 a 12 bullets ..."],\n'
-        '  "nota_metodologica": "1 línea"\n'
-        "}\n\n"
+        "DEVUELVE SOLO JSON VALIDO. SIN markdown. SIN ```.\n"
+        "Estructura exacta:\n"
+        "{"
+        "\"bullets\":[\"...\"],"
+        "\"nota_metodologica\":\"...\""
+        "}\n"
         "Reglas:\n"
-        "- 8 a 12 bullets, accionables y concretos.\n"
-        "- No inventes datos. Usa solo los INSUMOS.\n"
-        "- Incluye: narrativas dominantes, riesgos, oportunidades, mensajes sugeridos (informativos), qué monitorear mañana.\n\n"
-        f"INSUMOS (JSON):\n{payload_json}"
+        "- bullets: 8 a 12, concretos y accionables.\n"
+        "- Incluir: narrativas, riesgos, oportunidades, mensajes informativos, monitoreo mañana.\n"
+        "- No inventar datos.\n"
+        f"INSUMOS:{payload_json}"
     )
 
     def _call(max_tokens: int):
         body = {
             "contents": [{"parts": [{"text": prompt}]}],
-            "generationConfig": {"temperature": 0.2, "maxOutputTokens": max_tokens}
+            "generationConfig": {
+                "temperature": 0.2,
+                "maxOutputTokens": max_tokens
+            }
         }
-        r = requests.post(url, headers=headers, json=body, timeout=30)
-        return r
+        return requests.post(url, headers=headers, json=body, timeout=30)
 
-    # 1er intento
-    r = _call(280)
+    # Intento 1
+    r = _call(260)
     if r.status_code != 200:
         if debug:
-            return None, f"Gemini ERROR {r.status_code}: {r.text[:600]}"
+            st.text_area("DEBUG Gemini HTTP error", value=r.text[:1200], height=200)
         return None, f"Gemini ERROR {r.status_code}"
 
     data = r.json()
     text = _extract_gemini_text(data)
 
     if debug:
-        st.text_area("DEBUG: Respuesta cruda de Gemini", value=text, height=200)
+        st.text_area("DEBUG: Respuesta cruda de Gemini", value=text, height=220)
 
     obj = _try_parse_json(text)
 
-    # Si falla, reintenta 1 vez (a veces viene incompleto)
+    # Intento 2 (reintento con menos tokens y “fuerza” JSON)
     if obj is None:
-        r2 = _call(220)
+        r2 = _call(200)
         if r2.status_code == 200:
             data2 = r2.json()
             text2 = _extract_gemini_text(data2)
             if debug:
-                st.text_area("DEBUG: Respuesta cruda de Gemini (reintento)", value=text2, height=200)
+                st.text_area("DEBUG: Gemini (reintento)", value=text2, height=220)
             obj = _try_parse_json(text2)
-            if obj is not None:
-                text = text2  # para status
+            text = text2
 
     if obj is None:
-        return None, "Gemini: respuesta no parseable (incompleta o sin JSON)"
+        return None, "Gemini: respuesta no parseable (JSON incompleto o con texto extra)"
 
     bullets = obj.get("bullets", [])
     nota = obj.get("nota_metodologica", "")
 
     if not isinstance(bullets, list):
         return None, "Gemini: JSON sin bullets[]"
+
     bullets = [str(b).strip() for b in bullets if str(b).strip()]
 
-    if nota and isinstance(nota, str) and nota.strip():
+    if isinstance(nota, str) and nota.strip():
         bullets.append(f"Advertencia metodológica: {nota.strip()}")
 
-    # Asegurar 8–12
     bullets = bullets[:12]
-    if len(bullets) < 6:
-        return None, "Gemini: bullets insuficientes (muestra chica o salida pobre)"
+
+    # Si hay muy pocos datos, Gemini puede devolver pocos bullets
+    if len(bullets) < 5:
+        return None, "Gemini: salida demasiado corta (muestra pequeña o respuesta pobre)"
 
     return bullets, "Gemini OK (JSON)"
+
 
 if "last_search_ts" not in st.session_state:
     st.session_state["last_search_ts"] = 0
