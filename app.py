@@ -202,8 +202,8 @@ def resumen_ejecutivo_gemini(payload: dict, debug: bool = False):
         return None, "Gemini: falta GEMINI_API_KEY en secrets"
 
     model = "gemini-2.5-flash"
-    
     url = f"https://generativelanguage.googleapis.com/v1beta/models/{model}:generateContent?key={api_key}"
+    headers = {"Content-Type": "application/json", "x-goog-api-key": api_key}
 
     payload_json = json.dumps(payload, ensure_ascii=False)
 
