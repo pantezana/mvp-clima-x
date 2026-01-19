@@ -217,83 +217,92 @@ def resumen_ejecutivo_gemini(payload: dict, debug: bool = False):
     url = f"https://generativelanguage.googleapis.com/v1beta/models/{model}:generateContent?key={api_key}"
     headers = {"Content-Type": "application/json"}
 
-    # JSON compacto para que el prompt sea más “limpio”
-    payload_json = json.dumps(payload, ensure_ascii=False, separators=(",", ":"))
+    # ✅ Prompt simple (NO forces JSON aquí)
+    # El JSON lo forza el schema.
+    payload_json = json.dumps(payload, ensure_ascii=False)
 
-    # Prompt más estricto (y más corto)
     prompt = (
-        "DEVUELVE SOLO JSON VALIDO. SIN markdown. SIN ```.\n"
-        "Estructura exacta:\n"
-        "{"
-        "\"bullets\":[\"...\"],"
-        "\"nota_metodologica\":\"...\""
-        "}\n"
-        "Reglas:\n"
-        f"- Si volumen < 8: bullets 4 a 6.\n- Si volumen >= 8: bullets 8 a 12.\n"
-        "- Incluir: narrativas, riesgos, oportunidades, mensajes informativos, monitoreo mañana.\n"
-        "- No inventar datos.\n"
-        f"INSUMOS:{payload_json}"
+        "Eres un analista senior de clima social para toma de decisiones. No hagas propaganda.\n"
+        "Genera un resumen ejecutivo accionable con:\n"
+        "- Narrativas dominantes\n"
+        "- Riesgos\n"
+        "- Oportunidades\n"
+        "- Mensajes sugeridos (informativos, no propaganda)\n"
+        "- Qué monitorear mañana\n"
+        "- Advertencia metodológica (1 línea)\n\n"
+        "Reglas: No inventes datos. Si falta info, dilo.\n\n"
+        f"INSUMOS (JSON):\n{payload_json}"
     )
 
-    def _call(max_tokens: int):
-        body = {
-            "contents": [{"parts": [{"text": prompt}]}],
-            "generationConfig": {
-                "temperature": 0.2,
-                "maxOutputTokens": max_tokens
+    # ✅ JSON Schema (Structured Output)
+    schema = {
+        "type": "object",
+        "properties": {
+            "bullets": {
+                "type": "array",
+                "items": {"type": "string"},
+                "minItems": 8,
+                "maxItems": 12,
+                "description": "Lista de 8 a 12 bullets accionables y concretos."
+            },
+            "nota_metodologica": {
+                "type": "string",
+                "description": "1 línea de advertencia metodológica."
             }
+        },
+        "required": ["bullets", "nota_metodologica"],
+        "additionalProperties": False
+    }
+
+    body = {
+        "contents": [{"parts": [{"text": prompt}]}],
+        "generationConfig": {
+            "temperature": 0.2,
+            "maxOutputTokens": 450,
+            # 🔥 Lo importante:
+            "responseMimeType": "application/json",
+            "responseJsonSchema": schema
         }
-        return requests.post(url, headers=headers, json=body, timeout=30)
+    }
 
-    # Intento 1
-    r = _call(260)
-    if r.status_code != 200:
-        if debug:
-            st.text_area("DEBUG Gemini HTTP error", value=r.text[:1200], height=200)
-        return None, f"Gemini ERROR {r.status_code}"
-
-    data = r.json()
-    text = _extract_gemini_text(data)
-
-    if debug:
-        st.text_area("DEBUG: Respuesta cruda de Gemini", value=text, height=220)
-
-    obj = _try_parse_json(text)
-
-    # Intento 2 (reintento con menos tokens y “fuerza” JSON)
-    if obj is None:
-        r2 = _call(200)
-        if r2.status_code == 200:
-            data2 = r2.json()
-            text2 = _extract_gemini_text(data2)
+    try:
+        r = requests.post(url, headers=headers, json=body, timeout=30)
+        if r.status_code != 200:
             if debug:
-                st.text_area("DEBUG: Gemini (reintento)", value=text2, height=220)
-            obj = _try_parse_json(text2)
-            text = text2
+                return None, f"Gemini ERROR {r.status_code}: {r.text[:800]}"
+            return None, f"Gemini ERROR {r.status_code}"
 
-    if obj is None:
-        return None, "Gemini: respuesta no parseable (JSON incompleto o con texto extra)"
+        data = r.json()
 
-    bullets = obj.get("bullets", [])
-    nota = obj.get("nota_metodologica", "")
+        # Extraer texto (ahora debe ser JSON string válido)
+        text = _extract_gemini_text(data)
 
-    if not isinstance(bullets, list):
-        return None, "Gemini: JSON sin bullets[]"
+        if debug:
+            st.text_area("DEBUG: Respuesta cruda de Gemini (debe ser JSON)", value=text, height=220)
+            # Opcional: ver finishReason si existe
+            try:
+                fr = data.get("candidates", [])[0].get("finishReason", "")
+                st.caption(f"DEBUG: finishReason = {fr}")
+            except Exception:
+                pass
 
-    bullets = [str(b).strip() for b in bullets if str(b).strip()]
+        # Parsear JSON directo (debe funcionar en modo estructurado)
+        obj = json.loads(text)
 
-    if isinstance(nota, str) and nota.strip():
-        bullets.append(f"Advertencia metodológica: {nota.strip()}")
+        bullets = obj.get("bullets", [])
+        nota = obj.get("nota_metodologica", "")
 
-    bullets = bullets[:12]
+        if not isinstance(bullets, list) or len(bullets) < 6:
+            return None, "Gemini: salida pobre / bullets insuficientes"
 
-    # Si hay muy pocos datos, Gemini puede devolver pocos bullets
+        bullets = [str(b).strip() for b in bullets if str(b).strip()]
+        if nota and isinstance(nota, str) and nota.strip():
+            bullets.append(f"Advertencia metodológica: {nota.strip()}")
 
-    min_bullets = 4 if payload.get("volumen", 0) < 8 else 8
-    if len(bullets) < min_bullets:
-        return None, "Gemini: salida insuficiente para el volumen"
+        return bullets[:12], "Gemini OK (Structured JSON)"
 
-    return bullets, "Gemini OK (JSON)"
+    except Exception as e:
+        return None, f"Gemini: excepción parseando JSON ({type(e).__name__})"
 
 if "last_search_ts" not in st.session_state:
     st.session_state["last_search_ts"] = 0
@@ -523,7 +532,13 @@ if st.button("Buscar en X"):
                 temperatura = "🟡 Mixto / neutro"
 
             # Armamos insumos compactos (evita enviar 50 textos completos)
-            ejemplos = df.sort_values("Interacción", ascending=False).head(5)["Texto"].tolist()
+ 
+            ejemplos = (
+                df.sort_values("Interacción", ascending=False)
+                  .head(3)["Texto"]
+                  .apply(lambda t: (t[:280] + "…") if isinstance(t, str) and len(t) > 280 else t)
+                  .tolist()
+            )
 
             payload = {
                 "query": query,
