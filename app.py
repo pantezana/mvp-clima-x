@@ -154,6 +154,70 @@ def sentimiento_hf(texto: str):
     except Exception:
         return None, None
 
+def resumen_ejecutivo_gemini(payload: dict):
+    """
+    Devuelve lista de bullets (8–12) o None si falla.
+    """
+    api_key = st.secrets.get("GEMINI_API_KEY", "")
+    if not api_key:
+        return None
+
+    # Modelo recomendado para texto rápido y barato (si no está disponible, avísame y lo ajustamos)
+    model = "gemini-2.5-flash"
+
+    url = f"https://generativelanguage.googleapis.com/v1beta/models/{model}:generateContent?key={api_key}"
+
+    prompt = f"""
+Eres un analista senior de clima social para toma de decisiones. No hagas propaganda.
+Con los siguientes INSUMOS (datos) genera un Resumen Ejecutivo de 8 a 12 bullets:
+- Narrativas dominantes
+- Riesgos
+- Oportunidades
+- Mensajes sugeridos (framing informativo, no propaganda)
+- Qué monitorear mañana
+- Advertencia metodológica (1 bullet)
+
+Reglas:
+- No inventes datos.
+- Si falta info, dilo explícitamente.
+- Sé concreto, estilo briefing.
+
+INSUMOS (JSON):
+{payload}
+"""
+
+    body = {
+        "contents": [{"parts": [{"text": prompt}]}],
+        "generationConfig": {
+            "temperature": 0.3,
+            "maxOutputTokens": 350
+        }
+    }
+
+    try:
+        r = requests.post(url, json=body, timeout=25)
+        if r.status_code != 200:
+            return None
+        data = r.json()
+        text = data["candidates"][0]["content"]["parts"][0]["text"]
+
+        # Normalizamos a lista de bullets
+        bullets = []
+        for line in text.splitlines():
+            line = line.strip()
+            if not line:
+                continue
+            if line.startswith(("-", "•")):
+                bullets.append(line.lstrip("-• ").strip())
+        # Si Gemini no devolvió con guiones, devolvemos líneas no vacías
+        if len(bullets) < 5:
+            bullets = [l.strip() for l in text.splitlines() if l.strip()]
+
+        return bullets[:12]
+
+    except Exception:
+        return None
+
 if "last_search_ts" not in st.session_state:
     st.session_state["last_search_ts"] = 0
 
@@ -380,6 +444,23 @@ if st.button("Buscar en X"):
                 temperatura = "🟢 Clima favorable"
             else:
                 temperatura = "🟡 Mixto / neutro"
+
+            # Armamos insumos compactos (evita enviar 50 textos completos)
+            ejemplos = df.sort_values("Interacción", ascending=False).head(5)["Texto"].tolist()
+
+            payload = {
+                "query": query,
+                "time_range": time_range,
+                "volumen": int(total),
+                "sentimiento_pct": {"positivo": pct_pos, "neutral": pct_neu, "negativo": pct_neg},
+                "temperatura": temperatura,
+                "top_terminos": top_terminos_list[:10],
+                "ejemplos_top_interaccion": ejemplos,
+                "nota_ubicacion": "Ubicación inferida desde perfil/bio; no es geolocalización exacta."
+            }
+            
+            bullets_ia = resumen_ejecutivo_gemini(payload)
+
             
             # ─────────────────────────────
             # 🧾 PANEL EJECUTIVO (KPI + Alertas)
@@ -414,51 +495,58 @@ if st.button("Buscar en X"):
             # 🧠 RESUMEN EJECUTIVO (sin repetir números)
             # ─────────────────────────────
             st.markdown("## 🧠 Resumen ejecutivo (accionable)")
-            
-            # Riesgos / oportunidades (reglas simples, sin repetir métricas)
-            riesgo_bullets = []
-            if pct_neg >= 40:
-                riesgo_bullets.append("Riesgo reputacional alto: conversación con tono negativo predominante.")
-            elif pct_neg >= 30:
-                riesgo_bullets.append("Riesgo reputacional moderado: presencia relevante de negativos que puede escalar con eventos gatillo.")
+
+            if bullets_ia:
+                st.caption("Generado con IA (Gemini). Si falla, se usa el resumen por reglas.")
+                for b in bullets_ia:
+                    st.markdown(f"- {b}")
             else:
-                riesgo_bullets.append("Riesgo reputacional bajo en el periodo observado, sin señales fuertes de escalamiento.")
-            
-            oportunidad_bullets = []
-            if pct_pos > pct_neg:
-                oportunidad_bullets.append("Clima con espacio para reforzar narrativa: responder con información clara, oportuna y verificable.")
-            else:
-                oportunidad_bullets.append("Oportunidad de aclaración: reducir ambigüedad con FAQ, cifras y vocería consistente.")
-            
-            # Mensajes sugeridos (framing informativo, no propaganda)
-            mensajes = [
-                "Mensaje sugerido: 'Compartimos información verificable y actualizada sobre el tema, con fuentes y fechas claras.'",
-                "Mensaje sugerido: 'Si tienes dudas, revisa este resumen: qué se sabe, qué no se sabe aún y próximos hitos.'",
-            ]
-            if pct_neg >= 30:
-                mensajes.append("Mensaje sugerido: 'Entendemos la preocupación. Aclaramos los puntos críticos y cómo se atenderán.'")
-            
-            # Qué monitorear mañana (operativo)
-            monitoreo = [
-                "Monitorear si aparece un nuevo hashtag o término dominante (cambio de agenda).",
-                "Monitorear si sube la proporción de negativos o se concentra en una narrativa específica.",
-                "Monitorear cuentas/post con alta interacción (posibles amplificadores).",
-                "Monitorear señales regionales (ubicación inferida) solo como indicio, no como dato duro.",
-            ]
-            
-            # Construir bullets (8–12)
-            bullets = []
-            bullets.append(f"Se detecta una conversación con narrativa dominante alrededor de: {', '.join(top_terminos_list[:6]) if top_terminos_list else 'sin términos dominantes claros'}.")
-            bullets.extend(riesgo_bullets)
-            bullets.extend(oportunidad_bullets)
-            bullets.extend(mensajes[:2])
-            bullets.append("Acción táctica: preparar 3 respuestas estándar (datos, procesos, próximos pasos) y mantener consistencia.")
-            bullets.append("Acción táctica: si el volumen aumenta, publicar una aclaración breve + enlace a información completa.")
-            bullets.extend(monitoreo[:3])
-            
-            # Mostrar en pantalla (máximo 12)
-            for b in bullets[:12]:
-                st.markdown(f"- {b}")
+                st.caption("IA no disponible o falló. Mostrando resumen por reglas.")
+                                    
+                # Riesgos / oportunidades (reglas simples, sin repetir métricas)
+                riesgo_bullets = []
+                if pct_neg >= 40:
+                    riesgo_bullets.append("Riesgo reputacional alto: conversación con tono negativo predominante.")
+                elif pct_neg >= 30:
+                    riesgo_bullets.append("Riesgo reputacional moderado: presencia relevante de negativos que puede escalar con eventos gatillo.")
+                else:
+                    riesgo_bullets.append("Riesgo reputacional bajo en el periodo observado, sin señales fuertes de escalamiento.")
+                
+                oportunidad_bullets = []
+                if pct_pos > pct_neg:
+                    oportunidad_bullets.append("Clima con espacio para reforzar narrativa: responder con información clara, oportuna y verificable.")
+                else:
+                    oportunidad_bullets.append("Oportunidad de aclaración: reducir ambigüedad con FAQ, cifras y vocería consistente.")
+                
+                # Mensajes sugeridos (framing informativo, no propaganda)
+                mensajes = [
+                    "Mensaje sugerido: 'Compartimos información verificable y actualizada sobre el tema, con fuentes y fechas claras.'",
+                    "Mensaje sugerido: 'Si tienes dudas, revisa este resumen: qué se sabe, qué no se sabe aún y próximos hitos.'",
+                ]
+                if pct_neg >= 30:
+                    mensajes.append("Mensaje sugerido: 'Entendemos la preocupación. Aclaramos los puntos críticos y cómo se atenderán.'")
+                
+                # Qué monitorear mañana (operativo)
+                monitoreo = [
+                    "Monitorear si aparece un nuevo hashtag o término dominante (cambio de agenda).",
+                    "Monitorear si sube la proporción de negativos o se concentra en una narrativa específica.",
+                    "Monitorear cuentas/post con alta interacción (posibles amplificadores).",
+                    "Monitorear señales regionales (ubicación inferida) solo como indicio, no como dato duro.",
+                ]
+                
+                # Construir bullets (8–12)
+                bullets = []
+                bullets.append(f"Se detecta una conversación con narrativa dominante alrededor de: {', '.join(top_terminos_list[:6]) if top_terminos_list else 'sin términos dominantes claros'}.")
+                bullets.extend(riesgo_bullets)
+                bullets.extend(oportunidad_bullets)
+                bullets.extend(mensajes[:2])
+                bullets.append("Acción táctica: preparar 3 respuestas estándar (datos, procesos, próximos pasos) y mantener consistencia.")
+                bullets.append("Acción táctica: si el volumen aumenta, publicar una aclaración breve + enlace a información completa.")
+                bullets.extend(monitoreo[:3])
+                
+                # Mostrar en pantalla (máximo 12)
+                for b in bullets[:12]:
+                    st.markdown(f"- {b}")
             
             # Advertencia metodológica (una sola vez, corta)
             st.caption(
