@@ -21,6 +21,7 @@ time_range = st.selectbox(
     "Rango temporal",
     ["24 horas", "7 días", "30 días"]
 )
+debug_gemini = st.checkbox("Debug Gemini (mostrar errores)", value=False)
 
 # ─────────────────────────────
 # Selector de modelo de sentimiento (Hugging Face)
@@ -154,18 +155,20 @@ def sentimiento_hf(texto: str):
     except Exception:
         return None, None
 
-def resumen_ejecutivo_gemini(payload: dict):
+def resumen_ejecutivo_gemini(payload: dict, debug: bool = False):
     """
-    Devuelve lista de bullets (8–12) o None si falla.
+    Devuelve (bullets, status_info)
+    - bullets: lista 8–12 o None si falla
+    - status_info: texto corto para mostrar qué pasó (ok / error + código)
     """
     api_key = st.secrets.get("GEMINI_API_KEY", "")
     if not api_key:
-        return None
+        return None, "Gemini: sin GEMINI_API_KEY en secrets"
 
-    # Modelo recomendado para texto rápido y barato (si no está disponible, avísame y lo ajustamos)
-    model = "gemini-2.5-flash"
+    # Modelo recomendado en el quickstart actual (texto rápido)
+    model = "gemini-3-flash-preview"
 
-    url = f"https://generativelanguage.googleapis.com/v1beta/models/{model}:generateContent?key={api_key}"
+    url = f"https://generativelanguage.googleapis.com/v1beta/models/{model}:generateContent"
 
     prompt = f"""
 Eres un analista senior de clima social para toma de decisiones. No hagas propaganda.
@@ -184,7 +187,7 @@ Reglas:
 
 INSUMOS (JSON):
 {payload}
-"""
+""".strip()
 
     body = {
         "contents": [{"parts": [{"text": prompt}]}],
@@ -194,14 +197,33 @@ INSUMOS (JSON):
         }
     }
 
-    try:
-        r = requests.post(url, json=body, timeout=25)
-        if r.status_code != 200:
-            return None
-        data = r.json()
-        text = data["candidates"][0]["content"]["parts"][0]["text"]
+    headers = {
+        "Content-Type": "application/json",
+        "x-goog-api-key": api_key
+    }
 
-        # Normalizamos a lista de bullets
+    try:
+        r = requests.post(url, headers=headers, json=body, timeout=25)
+
+        if r.status_code != 200:
+            # Mostrar motivo si debug=True
+            if debug:
+                return None, f"Gemini ERROR {r.status_code}: {r.text[:500]}"
+            return None, f"Gemini ERROR {r.status_code}"
+
+        data = r.json()
+
+        text = (
+            data.get("candidates", [{}])[0]
+                .get("content", {})
+                .get("parts", [{}])[0]
+                .get("text", "")
+        ).strip()
+
+        if not text:
+            return None, "Gemini: respuesta vacía"
+
+        # Convertir a bullets
         bullets = []
         for line in text.splitlines():
             line = line.strip()
@@ -209,14 +231,17 @@ INSUMOS (JSON):
                 continue
             if line.startswith(("-", "•")):
                 bullets.append(line.lstrip("-• ").strip())
-        # Si Gemini no devolvió con guiones, devolvemos líneas no vacías
+
         if len(bullets) < 5:
             bullets = [l.strip() for l in text.splitlines() if l.strip()]
 
-        return bullets[:12]
+        return bullets[:12], "Gemini OK"
 
-    except Exception:
-        return None
+    except Exception as e:
+        if debug:
+            return None, f"Gemini EXCEPTION: {type(e).__name__}: {str(e)[:300]}"
+        return None, f"Gemini EXCEPTION: {type(e).__name__}"
+
 
 if "last_search_ts" not in st.session_state:
     st.session_state["last_search_ts"] = 0
@@ -459,8 +484,8 @@ if st.button("Buscar en X"):
                 "nota_ubicacion": "Ubicación inferida desde perfil/bio; no es geolocalización exacta."
             }
             
-            bullets_ia = resumen_ejecutivo_gemini(payload)
-
+            bullets_ia, gemini_status = resumen_ejecutivo_gemini(payload, debug=debug_gemini)
+            st.caption(gemini_status)
             
             # ─────────────────────────────
             # 🧾 PANEL EJECUTIVO (KPI + Alertas)
