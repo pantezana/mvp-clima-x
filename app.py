@@ -5,6 +5,8 @@ import pandas as pd
 import requests
 import time
 import plotly.express as px
+import json
+import ast
 from datetime import datetime, timedelta
 
 st.set_page_config(page_title="MVP Clima en X", layout="wide")
@@ -158,32 +160,34 @@ def sentimiento_hf(texto: str):
 def resumen_ejecutivo_gemini(payload: dict, debug: bool = False):
     """
     Devuelve (bullets, status_info)
-    - bullets: lista 8–12 o None si falla
-    - status_info: texto corto para mostrar qué pasó (ok / error + código)
+    bullets: lista de 8–12 strings o None
     """
     api_key = st.secrets.get("GEMINI_API_KEY", "")
     if not api_key:
         return None, "Gemini: sin GEMINI_API_KEY en secrets"
 
-    # Modelo recomendado en el quickstart actual (texto rápido)
     model = "gemini-3-flash-preview"
-
     url = f"https://generativelanguage.googleapis.com/v1beta/models/{model}:generateContent"
 
+    # 👇 Pedimos JSON ESTRICTO
     prompt = f"""
-Eres un analista senior de clima social para toma de decisiones. No hagas propaganda.
-Con los siguientes INSUMOS (datos) genera un Resumen Ejecutivo de 8 a 12 bullets:
-- Narrativas dominantes
-- Riesgos
-- Oportunidades
-- Mensajes sugeridos (framing informativo, no propaganda)
-- Qué monitorear mañana
-- Advertencia metodológica (1 bullet)
+Eres un analista senior de clima social para toma de decisiones (no propaganda).
+Devuelve SOLO un JSON válido (sin markdown, sin texto extra) con esta estructura EXACTA:
+
+{{
+  "bullets": [
+    "bullet 1",
+    "...",
+    "bullet 8 a 12"
+  ],
+  "nota_metodologica": "1 línea"
+}}
 
 Reglas:
+- 8 a 12 bullets, accionables y concretos.
 - No inventes datos.
-- Si falta info, dilo explícitamente.
-- Sé concreto, estilo briefing.
+- Usa únicamente los insumos.
+- Incluye: narrativas dominantes, riesgos, oportunidades, mensajes sugeridos (informativos), qué monitorear mañana.
 
 INSUMOS (JSON):
 {payload}
@@ -191,28 +195,18 @@ INSUMOS (JSON):
 
     body = {
         "contents": [{"parts": [{"text": prompt}]}],
-        "generationConfig": {
-            "temperature": 0.3,
-            "maxOutputTokens": 350
-        }
+        "generationConfig": {"temperature": 0.3, "maxOutputTokens": 450}
     }
-
-    headers = {
-        "Content-Type": "application/json",
-        "x-goog-api-key": api_key
-    }
+    headers = {"Content-Type": "application/json", "x-goog-api-key": api_key}
 
     try:
-        r = requests.post(url, headers=headers, json=body, timeout=25)
-
+        r = requests.post(url, headers=headers, json=body, timeout=30)
         if r.status_code != 200:
-            # Mostrar motivo si debug=True
             if debug:
-                return None, f"Gemini ERROR {r.status_code}: {r.text[:500]}"
+                return None, f"Gemini ERROR {r.status_code}: {r.text[:600]}"
             return None, f"Gemini ERROR {r.status_code}"
 
         data = r.json()
-
         text = (
             data.get("candidates", [{}])[0]
                 .get("content", {})
@@ -220,27 +214,58 @@ INSUMOS (JSON):
                 .get("text", "")
         ).strip()
 
+        if debug:
+            st.text_area("DEBUG: Respuesta cruda de Gemini", value=text, height=180)
+
         if not text:
             return None, "Gemini: respuesta vacía"
 
-        # Convertir a bullets
+        # 1) Intento: JSON directo
+        try:
+            obj = json.loads(text)
+            bullets = obj.get("bullets", [])
+            nota = obj.get("nota_metodologica", "")
+            bullets = [b.strip() for b in bullets if isinstance(b, str) and b.strip()]
+            if nota and isinstance(nota, str):
+                bullets.append(f"Advertencia metodológica: {nota.strip()}")
+            return bullets[:12], "Gemini OK (JSON)"
+        except Exception:
+            pass
+
+        # 2) Intento: JSON dentro de un bloque (por si Gemini lo envolvió)
+        m = re.search(r"\{.*\}", text, re.DOTALL)
+        if m:
+            candidate = m.group(0)
+            try:
+                obj = json.loads(candidate)
+                bullets = obj.get("bullets", [])
+                nota = obj.get("nota_metodologica", "")
+                bullets = [b.strip() for b in bullets if isinstance(b, str) and b.strip()]
+                if nota and isinstance(nota, str):
+                    bullets.append(f"Advertencia metodológica: {nota.strip()}")
+                return bullets[:12], "Gemini OK (JSON extraído)"
+            except Exception:
+                pass
+
+        # 3) Fallback: parser robusto a texto libre
+        lines = [l.strip() for l in text.splitlines() if l.strip()]
         bullets = []
-        for line in text.splitlines():
-            line = line.strip()
-            if not line:
-                continue
-            if line.startswith(("-", "•")):
-                bullets.append(line.lstrip("-• ").strip())
-
-        if len(bullets) < 5:
-            bullets = [l.strip() for l in text.splitlines() if l.strip()]
-
-        return bullets[:12], "Gemini OK"
+        for l in lines:
+            # quitar markdown
+            l = re.sub(r"^\*\*|\*\*$", "", l).strip()
+            l = re.sub(r"^[-•\d\)\.]+\s*", "", l).strip()
+            if len(l) >= 8:
+                bullets.append(l)
+        bullets = bullets[:12]
+        if bullets:
+            return bullets, "Gemini OK (texto libre, parseado)"
+        return None, "Gemini: no se pudieron extraer bullets"
 
     except Exception as e:
         if debug:
             return None, f"Gemini EXCEPTION: {type(e).__name__}: {str(e)[:300]}"
         return None, f"Gemini EXCEPTION: {type(e).__name__}"
+
 
 
 if "last_search_ts" not in st.session_state:
