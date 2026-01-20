@@ -210,8 +210,13 @@ def _try_parse_json(text: str):
 
 def resumen_ejecutivo_gemini(payload: dict, debug: bool = False):
     """
-    Retorna: (bullets_list, status_str)
-    bullets_list: lista (8-12) o None
+    Retorna: (texto_resumen, status_str)
+
+    texto_resumen: str con 3 párrafos/títulos:
+      Narrativa: ...
+      Riesgos: ...
+      Oportunidades: ...
+    o None si falla.
     """
     api_key = st.secrets.get("GEMINI_API_KEY", "")
     if not api_key:
@@ -221,42 +226,71 @@ def resumen_ejecutivo_gemini(payload: dict, debug: bool = False):
     url = f"https://generativelanguage.googleapis.com/v1beta/models/{model}:generateContent?key={api_key}"
     headers = {"Content-Type": "application/json"}
 
-    # ✅ JSON Schema: obliga a devolver bullets como LISTA (8..12) + nota metodológica
+    # ✅ Schema NUEVO: obliga a devolver 3 campos de texto (no bullets)
     schema = {
         "type": "object",
         "properties": {
-            "bullets": {
-                "type": "array",
-                "minItems": 8,
-                "maxItems": 12,
-                "items": {"type": "string"}
-            },
-            "nota_metodologica": {"type": "string"}
+            "narrativa": {"type": "string"},
+            "riesgos": {"type": "string"},
+            "oportunidades": {"type": "string"}
         },
-        "required": ["bullets", "nota_metodologica"],
+        "required": ["narrativa", "riesgos", "oportunidades"],
         "additionalProperties": False
     }
 
-    # Prompt corto (ya NO pedimos "devuelve JSON", eso lo hace el schema)
-    prompt = (
-        "Eres analista senior de clima social para toma de decisiones. No hagas propaganda.\n"
-        "Con los INSUMOS (JSON) redacta:\n"
-        "- 8 a 12 bullets accionables (narrativas, riesgos, oportunidades, mensajes sugeridos informativos, qué monitorear mañana)\n"
-        "- 1 nota metodológica breve.\n"
-        "Reglas: no inventes datos; si falta info, dilo.\n"
-        f"INSUMOS (JSON): {json.dumps(payload, ensure_ascii=False)}"
-    )
+    # ✅ Aquí entran los INSUMOS: se inyectan como JSON dentro del prompt
+    insumos_json = json.dumps(payload, ensure_ascii=False)
+
+    # ✅ Prompt NUEVO (profesional, explícito, 3 secciones)
+    prompt = f"""
+Actúa como un analista senior especializado en interpretación de conversaciones públicas en X (antes Twitter),
+con experiencia en análisis de clima social, opinión pública y lectura estratégica de redes para toma de decisiones.
+
+CONTEXTO:
+La información que recibirás proviene de publicaciones públicas en X sobre una temática (query) en un rango temporal (time_range).
+Estos datos muestran señales tempranas del debate digital; NO representan a toda la población.
+
+INSUMOS (JSON) QUE RECIBES (en este orden):
+1) query: temática o palabra clave analizada en X.
+2) time_range: periodo temporal analizado (24h, 48h, 72h, 7 días, 30 días).
+3) volumen: número de publicaciones analizadas.
+4) sentimiento_pct: porcentaje positivo/neutral/negativo (estimación automatizada).
+5) temperatura: lectura sintética del clima (favorable/mixto/riesgo).
+6) top_terminos: términos dominantes más frecuentes.
+7) ejemplos_top_interaccion: extractos de posts con mayor interacción.
+8) nota_ubicacion: advertencia sobre ubicación inferida (no geolocalización exacta).
+
+TAREA:
+Usa EXCLUSIVAMENTE los insumos para elaborar un resumen ejecutivo claro, institucional y accionable.
+No inventes datos. Si falta evidencia para afirmar algo, dilo explícitamente.
+
+SALIDA (OBLIGATORIA):
+Devuelve SOLO un JSON válido (sin markdown, sin texto extra) con esta estructura EXACTA:
+
+{{
+  "narrativa": "Párrafo breve que explique la narrativa predominante.",
+  "riesgos": "Párrafo breve con riesgos detectados (o indicar que son bajos/moderados si aplica).",
+  "oportunidades": "Párrafo breve con oportunidades accionables."
+}}
+
+REGLAS DE REDACCIÓN:
+- Cada párrafo debe ser conciso (máx. 5–6 líneas).
+- Lenguaje claro, profesional y no propagandístico.
+- No repitas cifras literalmente.
+- No uses listas ni viñetas.
+
+INSUMOS (JSON):
+{insumos_json}
+""".strip()
 
     body = {
         "contents": [{"parts": [{"text": prompt}]}],
         "generationConfig": {
-            # ✅ ESTA es la clave
             "responseMimeType": "application/json",
             "responseJsonSchema": schema,
-
-            # ✅ Dale aire para que complete (tu error era truncamiento)
             "temperature": 0.2,
-            "maxOutputTokens": 700
+            # ✅ como ahora son 3 párrafos, no necesitas 700
+            "maxOutputTokens": 450
         }
     }
 
@@ -267,7 +301,6 @@ def resumen_ejecutivo_gemini(payload: dict, debug: bool = False):
 
         data = r.json()
 
-        # Debug: finishReason + texto crudo
         finish = ""
         raw_text = ""
         try:
@@ -278,32 +311,37 @@ def resumen_ejecutivo_gemini(payload: dict, debug: bool = False):
             pass
 
         if debug:
-            st.text_area("DEBUG: Gemini raw text (JSON)", value=raw_text, height=180)
+            st.text_area("DEBUG: Gemini raw text (JSON)", value=raw_text or "", height=180)
             st.caption(f"DEBUG: finishReason = {finish or 'N/A'}")
 
         if not raw_text:
             return None, "Gemini: respuesta vacía"
 
-        # ✅ Aquí raw_text YA DEBE ser JSON válido (por schema)
         obj = json.loads(raw_text)
 
-        bullets = obj.get("bullets", [])
-        nota = obj.get("nota_metodologica", "")
+        narrativa = (obj.get("narrativa") or "").strip()
+        riesgos = (obj.get("riesgos") or "").strip()
+        oportunidades = (obj.get("oportunidades") or "").strip()
 
-        if not isinstance(bullets, list) or len(bullets) < 8:
-            return None, "Gemini: bullets insuficientes (muestra muy chica o mala salida)"
+        if not narrativa or not riesgos or not oportunidades:
+            return None, "Gemini: JSON incompleto (faltan campos o vienen vacíos)"
 
-        bullets = [str(b).strip() for b in bullets if str(b).strip()]
-        nota = (nota or "").strip()
+        # ✅ Devolvemos un solo texto listo para mostrar
+        texto = (
+            f"**Narrativa:** {narrativa}\n\n"
+            f"**Riesgos:** {riesgos}\n\n"
+            f"**Oportunidades:** {oportunidades}"
+        )
 
-        # (Opcional) anexar la nota como último bullet
-        if nota:
-            bullets = bullets[:11] + [f"Advertencia metodológica: {nota}"]
+        # Si llega truncado igual, te avisará aquí
+        if finish == "MAX_TOKENS":
+            return None, "Gemini: salida truncada (MAX_TOKENS). Reduce texto o baja complejidad."
 
-        return bullets[:12], "Gemini OK (Structured JSON)"
+        return texto, "Gemini OK (3 secciones)"
 
     except Exception as e:
         return None, f"Gemini: excepción ({type(e).__name__})"
+
 
 if "last_search_ts" not in st.session_state:
     st.session_state["last_search_ts"] = 0
@@ -555,7 +593,7 @@ if st.button("Buscar en X"):
             # ✅ Regla simple: si hay muy pocos posts, Gemini suele dar salida pobre.
             # En ese caso saltamos directo al resumen por reglas.
             if total < 8:
-                bullets_ia = None
+                bullets_ia = resumen_ejecutivo_gemini(payload, debug=debug_gemini)
                 gemini_status = "Gemini: muestra muy chica (<8). Usando resumen por reglas."
             else:
                 bullets_ia, gemini_status = resumen_ejecutivo_gemini(payload, debug=debug_gemini)
@@ -598,8 +636,7 @@ if st.button("Buscar en X"):
 
             if bullets_ia:
                 st.caption("Generado con IA (Gemini). Si falla, se usa el resumen por reglas.")
-                for b in bullets_ia:
-                    st.markdown(f"- {b}")
+                st.markdown(bullets_ia)
             else:
                 st.caption("IA no disponible o falló. Mostrando resumen por reglas.")
                                     
