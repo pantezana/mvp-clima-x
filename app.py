@@ -21,7 +21,7 @@ query = st.text_input("Palabras clave / hashtags")
 
 time_range = st.selectbox(
     "Rango temporal",
-    ["24 horas", "7 días", "30 días"]
+    ["24 horas", "48 horas","72 horas", "7 días", "30 días"]
 )
 
 debug_gemini = st.checkbox("Debug Gemini", value=False)
@@ -57,6 +57,10 @@ PERU_PLACES = [
 def get_start_time(option):
     if option == "24 horas":
         return datetime.utcnow() - timedelta(hours=24)
+    if option == "48 horas":
+        return datetime.utcnow() - timedelta(hours=48)
+    if option == "72 horas":
+        return datetime.utcnow() - timedelta(hours=72)
     if option == "7 días":
         return datetime.utcnow() - timedelta(days=7)
     return datetime.utcnow() - timedelta(days=30)
