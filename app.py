@@ -260,8 +260,7 @@ Nada más. No agregues saludos ni conclusiones.
     body = {
         "contents": [{"parts": [{"text": prompt}]}],
         "generationConfig": {
-            "temperature": 0.2,
-            "maxOutputTokens": 800  # 3 párrafos, corto (y reduces MAX_TOKENS)
+            "temperature": 0.2
         }
     }
 
@@ -550,8 +549,8 @@ if st.button("Buscar en X"):
  
             ejemplos = (
                 df.sort_values("Interacción", ascending=False)
-                  .head(3)["Texto"]
-                  .apply(lambda t: (t[:280] + "…") if isinstance(t, str) and len(t) > 280 else t)
+                  .head(10)["Texto"]
+                  .apply(lambda t: (t[:240] + "…") if isinstance(t, str) and len(t) > 240 else t)
                   .tolist()
             )
 
