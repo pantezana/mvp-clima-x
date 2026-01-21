@@ -24,6 +24,15 @@ time_range = st.selectbox(
     ["24 horas", "48 horas","72 horas", "7 días", "30 días"]
 )
 
+# Límite de publicaciones a consultar (control de cuota)
+limite_opcion = st.selectbox(
+    "Límite de publicaciones a consultar (control de cuota X)",
+    ["50", "100", "200", "500", "1000", "Sin límite (hasta donde llegue X)"],
+    index=2  # 200 por defecto (ajústalo si quieres)
+)
+
+max_posts = None if "Sin límite" in limite_opcion else int(limite_opcion)
+
 debug_gemini = st.checkbox("Debug Gemini", value=False)
 
 # ─────────────────────────────
@@ -310,6 +319,61 @@ Nada más. No agregues saludos ni conclusiones.
 if "last_search_ts" not in st.session_state:
     st.session_state["last_search_ts"] = 0
 
+def fetch_tweets_paginado(
+    client,
+    query,
+    start_time,
+    max_posts=None,
+    tweet_fields=None,
+    expansions=None,
+    user_fields=None
+):
+    tweets_all = []
+    users_by_id = {}
+    next_token = None
+
+    tweet_fields = tweet_fields or ["created_at", "public_metrics", "author_id"]
+    expansions = expansions or ["author_id"]
+    user_fields = user_fields or ["username", "name", "location", "description"]
+
+    page_size = 100
+
+    while True:
+        if max_posts is not None and len(tweets_all) >= max_posts:
+            break
+
+        req_size = page_size
+        if max_posts is not None:
+            req_size = min(page_size, max_posts - len(tweets_all))
+            req_size = max(10, req_size)
+
+        resp = client.search_recent_tweets(
+            query=query,
+            start_time=start_time,
+            max_results=req_size,
+            tweet_fields=tweet_fields,
+            expansions=expansions,
+            user_fields=user_fields,
+            next_token=next_token
+        )
+
+        if not resp or not resp.data:
+            break
+
+        tweets_all.extend(resp.data)
+
+        if resp.includes and "users" in resp.includes:
+            for u in resp.includes["users"]:
+                users_by_id[u.id] = u
+
+        meta = getattr(resp, "meta", {}) or {}
+        next_token = meta.get("next_token")
+        if not next_token:
+            break
+
+    return tweets_all, users_by_id
+
+
 if st.button("Buscar en X"):
     now = time.time()
     if now - st.session_state["last_search_ts"] < 20:
@@ -323,15 +387,17 @@ if st.button("Buscar en X"):
         start_time = get_start_time(time_range).isoformat("T") + "Z"
 
         # Pedimos también info del autor vía expansions
-        try:
-            response = client.search_recent_tweets(
+        try:     
+            tweets_data, users_by_id = fetch_tweets_paginado(
+                client=client,
                 query=query,
                 start_time=start_time,
-                max_results=50,
+                max_posts=max_posts,
                 tweet_fields=["created_at", "public_metrics", "author_id"],
                 expansions=["author_id"],
                 user_fields=["username", "name", "location", "description"]
             )
+
         except tweepy.errors.TooManyRequests as e:
             # Intentar leer "reset time" si existe
             reset_info = ""
@@ -352,6 +418,15 @@ if st.button("Buscar en X"):
             st.stop()
         except Exception as e:
             st.error(f"⚠️ Error inesperado al consultar X: {type(e).__name__}")
+            st.stop()
+        
+        if tweets_data:
+            data = []
+            for t in tweets_data:
+                u = users_by_id.get(t.author_id)
+                ...
+        else:
+            st.warning("No se encontraron publicaciones en el rango seleccionado.")
             st.stop()
 
         if response.data:
@@ -390,7 +465,7 @@ if st.button("Buscar en X"):
 
            
 
-            st.markdown("## 🧠 ANALSIS Y RESULTADOS")
+            st.markdown("## 🧠 ANALISIS Y RESULTADOS")
             
             # --- Preparación de texto
             
