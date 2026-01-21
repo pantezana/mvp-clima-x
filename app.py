@@ -32,6 +32,55 @@ limite_opcion = st.selectbox(
 
 max_posts = None if "Sin límite" in limite_opcion else int(limite_opcion)
 
+st.markdown("### 🎛️ Tipo de contenido a analizar")
+
+c1, c2, c3 = st.columns(3)
+with c1:
+    incluir_originales = st.checkbox("Posts originales", value=True)
+with c2:
+    incluir_retweets = st.checkbox("Retweets (RT puros)", value=True)
+with c3:
+    incluir_quotes = st.checkbox("Retweets con cita (quote)", value=True)
+
+# Regla simple de validación (neófito-friendly)
+if not (incluir_originales or incluir_retweets or incluir_quotes):
+    st.warning("Selecciona al menos un tipo de contenido (Originales, RT puros o Quotes).")
+
+# Nota de uso (educativa)
+st.caption(
+    "Tip: Si eliges solo 'Posts originales', tu análisis no se llenará de retweets repetidos. "
+    "Si incluyes RT/Quotes, verás también 'Amplificación' (qué post se está difundiendo)."
+)
+
+def build_x_query(base_query: str, incluir_originales: bool, incluir_retweets: bool, incluir_quotes: bool) -> str:
+    """
+    Construye el query final para X (Twitter) combinando filtros.
+    - Originales: excluimos retweets (y opcionalmente excluimos quotes si no se quieren).
+    - RT puros: incluye 'is:retweet' y excluye 'is:quote' para no mezclar.
+    - Quotes: incluye 'is:quote'
+    IMPORTANTE: Según tu decisión, luego lo unificaremos en una sola llamada o varias.
+    Por ahora dejamos el helper listo (y seguro) para usarlo en la PARTE 2/3.
+    """
+    q = (base_query or "").strip()
+    if not q:
+        return q
+
+    partes = [f"({q})"]
+
+    # Si se eligen combinaciones, NO aplicamos filtros aquí todavía.
+    # En PARTE 2/3 haremos UNA SOLA llamada con todo y separaremos por campos.
+    # Este helper queda por si luego quieres hacer "modo avanzado" (consultas separadas).
+    return " ".join(partes)
+
+# Query final (por ahora igual al base; se usa en la llamada)
+query_final = build_x_query(query, incluir_originales, incluir_retweets, incluir_quotes)
+
+# Guardamos selección en session_state (por si luego cacheamos)
+st.session_state["incl_originales"] = incluir_originales
+st.session_state["incl_retweets"] = incluir_retweets
+st.session_state["incl_quotes"] = incluir_quotes
+st.session_state["query_final"] = query_final
+
 # ─────────────────────────────
 # Selector de modelo de sentimiento (Hugging Face)
 # ─────────────────────────────
@@ -405,16 +454,51 @@ if st.button("Buscar en X"):
         start_time = get_start_time(time_range).isoformat("T") + "Z"
 
         # Pedimos también info del autor vía expansions
-        try:     
+        try:             
+            # =========================
+            # PARTE 2 — Ajuste de consulta a X (1 sola llamada) + campos para diferenciar Original/RT/Quote
+            # =========================
+            
+            # Recuperamos selección (por si el usuario cambió checks)
+            incl_originales = st.session_state.get("incl_originales", True)
+            incl_retweets = st.session_state.get("incl_retweets", True)
+            incl_quotes = st.session_state.get("incl_quotes", True)
+            
+            query_final = st.session_state.get("query_final", query)
+            
+            # 🚩 Importante:
+            # - Traemos referenced_tweets y conversation_id para clasificar.
+            # - Incluimos expansion referenced_tweets.id para que X devuelva el tweet original en includes si está disponible.
+            tweet_fields_req = [
+                "created_at",
+                "public_metrics",
+                "author_id",
+                "referenced_tweets",
+                "conversation_id",
+                "lang"
+            ]
+            
+            expansions_req = [
+                "author_id",
+                "referenced_tweets.id",
+                "in_reply_to_user_id"
+            ]
+            
+            user_fields_req = ["username", "name", "location", "description"]
+            
+            # Llamada paginada (una sola)
             tweets_data, users_by_id = fetch_tweets_paginado(
                 client=client,
-                query=query,
+                query=query_final,
                 start_time=start_time,
                 max_posts=max_posts,
-                tweet_fields=["created_at", "public_metrics", "author_id"],
-                expansions=["author_id"],
-                user_fields=["username", "name", "location", "description"]
+                tweet_fields=tweet_fields_req,
+                expansions=expansions_req,
+                user_fields=user_fields_req
             )
+            
+            # Guardamos en session_state por si luego quieres exportar / depurar
+            st.session_state["tweets_data_count"] = len(tweets_data) if tweets_data else 0
 
         except tweepy.errors.TooManyRequests as e:
             # Intentar leer "reset time" si existe
@@ -438,284 +522,803 @@ if st.button("Buscar en X"):
             st.error(f"⚠️ Error inesperado al consultar X: {type(e).__name__}")
             st.stop()
         
-        if tweets_data:
-            data = []
-            for t in tweets_data:
-                u = users_by_id.get(t.author_id)
+        # =========================
+        # PARTE 3 — Armar df_raw + clasificar Original / RT puro / Quote + separar en 3 dataframes
+        # =========================
+        # ✅ DÓNDE PEGAR:
+        # Pega este bloque JUSTO DESPUÉS de la PARTE 2 (después de obtener tweets_data, users_by_id)
+        # y ANTES de tu bloque actual que arma "data = []" y "df = pd.DataFrame(data)".
         
-                username = getattr(u, "username", None) if u else None
-                name = getattr(u, "name", None) if u else None
-                profile_location = getattr(u, "location", None) if u else None
-                profile_desc = getattr(u, "description", None) if u else None
+        # Recuperamos selección (checks)
+        incl_originales = st.session_state.get("incl_originales", True)
+        incl_retweets = st.session_state.get("incl_retweets", True)
+        incl_quotes = st.session_state.get("incl_quotes", True)
         
-                ubicacion, confianza, fuente = infer_peru_location(profile_location, profile_desc)
+        # 1) Armamos un diccionario de "tweets incluidos" (cuando expansions trae referenced_tweets.id)
+        #    Esto permite obtener texto del tweet original si X lo incluyó en includes.
+        includes_tweets_by_id = {}
+        try:
+            # En Tweepy v2, el objeto Response puede traer resp.includes; aquí solo tenemos tweets_data y users_by_id.
+            # fetch_tweets_paginado no devuelve includes de tweets, así que NO los tenemos aún.
+            # 👉 Solución: en PARTE 3 trabajamos SIN includes de tweets (robusto).
+            # (Si luego quieres, ajustamos fetch_tweets_paginado para que también devuelva resp.includes["tweets"].)
+            pass
+        except Exception:
+            pass
         
-                # Link público al post (siempre que tengamos username)
-                tweet_url = f"https://x.com/{username}/status/{t.id}" if username else ""
+        def clasificar_tipo_y_original_id(tweet_obj) -> tuple[str, str | None]:
+            """
+            Devuelve (tipo, original_id)
+            tipo ∈ {"Original", "RT", "Quote"}
+            original_id: id del tweet original al que referencia (si aplica)
+            """
+            refs = getattr(tweet_obj, "referenced_tweets", None)
         
-                data.append({
-                    "Autor": f"@{username}" if username else (name or "Desconocido"),
-                    "URL": tweet_url,
-                    "Texto": t.text,
-                    "Fecha": t.created_at,
-                    "Likes": (t.public_metrics or {}).get("like_count", 0),
-                    "Retweets": (t.public_metrics or {}).get("retweet_count", 0),
-                    "Ubicación inferida": ubicacion,
-                    "Confianza": confianza,
-                    "Fuente ubic.": fuente
-                })
+            # Sin referencias -> es original (o respuesta sin ref; igual lo tratamos como "Original" para MVP)
+            if not refs:
+                return "Original", None
         
-            df = pd.DataFrame(data)
-        else:
-            st.warning("No se encontraron publicaciones para ese criterio o rango seleccionado")
+            # referenced_tweets suele ser lista de dict/obj con .type y .id
+            for r in refs:
+                r_type = getattr(r, "type", None) or (r.get("type") if isinstance(r, dict) else None)
+                r_id = getattr(r, "id", None) or (r.get("id") if isinstance(r, dict) else None)
+        
+                if r_type == "retweeted":
+                    return "RT", str(r_id) if r_id else None
+                if r_type == "quoted":
+                    return "Quote", str(r_id) if r_id else None
+        
+            # Si viene otra referencia (replied_to), lo dejamos como "Original" para no romper flujo MVP
+            return "Original", None
+        
+        def extraer_username_y_url(tweet_id: str, user_obj) -> tuple[str | None, str]:
+            username = getattr(user_obj, "username", None) if user_obj else None
+            url = f"https://x.com/{username}/status/{tweet_id}" if username else ""
+            return username, url
+        
+        # 2) Convertimos tweets_data a df_raw con campos mínimos + clasificación
+        rows = []
+        for t in (tweets_data or []):
+            u = users_by_id.get(t.author_id)
+        
+            username, tweet_url = extraer_username_y_url(str(t.id), u)
+        
+            name = getattr(u, "name", None) if u else None
+            profile_location = getattr(u, "location", None) if u else None
+            profile_desc = getattr(u, "description", None) if u else None
+        
+            ubicacion, confianza, fuente = infer_peru_location(profile_location, profile_desc)
+        
+            tipo, original_id = clasificar_tipo_y_original_id(t)
+        
+            rows.append({
+                "tweet_id": str(t.id),
+                "original_id": str(original_id) if original_id else None,   # si es RT/Quote -> id del tweet original
+                "tipo": tipo,                                               # Original / RT / Quote
+                "Autor": f"@{username}" if username else (name or "Desconocido"),
+                "URL": tweet_url,
+                "Texto": getattr(t, "text", ""),
+                "Fecha": getattr(t, "created_at", None),
+                "Likes": (getattr(t, "public_metrics", None) or {}).get("like_count", 0),
+                "Retweets": (getattr(t, "public_metrics", None) or {}).get("retweet_count", 0),
+                "Ubicación inferida": ubicacion,
+                "Confianza": confianza,
+                "Fuente ubic.": fuente
+            })
+        
+        df_raw = pd.DataFrame(rows)
+        
+        if df_raw.empty:
+            st.warning("No se encontraron publicaciones para ese criterio o rango seleccionado.")
             st.stop()
+        
+        # 3) Filtramos según los checks del usuario (sin hacer nueva consulta)
+        tipos_permitidos = set()
+        if incl_originales:
+            tipos_permitidos.add("Original")
+        if incl_retweets:
+            tipos_permitidos.add("RT")
+        if incl_quotes:
+            tipos_permitidos.add("Quote")
+        
+        df_raw = df_raw[df_raw["tipo"].isin(tipos_permitidos)].copy()
+        
+        if df_raw.empty:
+            st.warning("Con los filtros seleccionados (Original/RT/Quote) no hay resultados en el rango.")
+            st.stop()
+        
+        # 4) Separamos en 3 dfs base
+        df_originales = df_raw[df_raw["tipo"] == "Original"].copy()
+        df_rt_puros   = df_raw[df_raw["tipo"] == "RT"].copy()
+        df_quotes     = df_raw[df_raw["tipo"] == "Quote"].copy()
+        
+        # Tip: para depurar rápido
+        st.session_state["df_raw_rows"] = int(len(df_raw))
+        st.session_state["df_originales_rows"] = int(len(df_originales))
+        st.session_state["df_rt_puros_rows"] = int(len(df_rt_puros))
+        st.session_state["df_quotes_rows"] = int(len(df_quotes))
+        
+        # 5) Normalizamos tipos básicos (fechas y métricas)
+        for _df in [df_originales, df_rt_puros, df_quotes]:
+            if _df.empty:
+                continue
+            _df["Fecha"] = pd.to_datetime(_df["Fecha"], errors="coerce")
+            _df["Likes"] = pd.to_numeric(_df["Likes"], errors="coerce").fillna(0)
+            _df["Retweets"] = pd.to_numeric(_df["Retweets"], errors="coerce").fillna(0)
+            _df["Interacción"] = _df["Likes"] + _df["Retweets"]
+        
+        # ✅ A partir de aquí ya NO uses la variable "df" antigua.
+        # Ahora trabajarás con:
+        # - df_originales (conversación base)
+        # - df_quotes (conversación + amplificación, porque trae comentario)
+        # - df_rt_puros (amplificación pura; NO lo usaremos para sentimiento por fila en la PARTE 4)
 
 
         st.markdown("## 🧠 ANALISIS Y RESULTADOS")
-                        
-        # 1) Intentamos con Hugging Face (IA)
-        sent_hf = []
-        score_hf = []
-            
-        for txt in df["Texto"].tolist():
-            s, sc = sentimiento_hf(txt)
-            sent_hf.append(s)
-            score_hf.append(sc)
-            
-        df["Sentimiento_HF"] = sent_hf
-        df["Score_HF"] = score_hf
-            
-        # 2) Si Hugging Face falla, usamos el plan B (léxico)
-        df["Sentimiento_Lex"] = df["Texto"].apply(calcular_sentimiento)
-            
-        # 3) Sentimiento final:
-        # - Si HF dio respuesta: usamos HF
-        # - Si HF no dio: usamos Lex
-        df["Sentimiento"] = df["Sentimiento_HF"].fillna(df["Sentimiento_Lex"])
 
-        # Informar método usado
-        metodo_sent = "IA (Hugging Face)" if df["Sentimiento_HF"].notna().any() else "Léxico (fallback)"
+        # =========================
+        # PARTE 4 — Sentimiento “sin inflar” + df_conversacion + base para df_amplificacion
+        # =========================
+        # ✅ DÓNDE PEGAR:
+        # Pega este bloque JUSTO DESPUÉS de tu:
+        #   st.markdown("## 🧠 ANALISIS Y RESULTADOS")
+        # y ANTES de cualquier lógica vieja que use "df" (ya NO usamos df).
+        
+        st.markdown("### 🙂 Sentimiento (sin duplicar por retweets)")
+        
+        # ---------------------------------------------------------
+        # 4.1) Definir “conversación”:
+        # - Conversación incluye: originales + quotes (porque quotes sí aportan comentario nuevo)
+        # - RT puros NO entran a conversación (son amplificación pura y repiten texto)
+        # ---------------------------------------------------------
+        df_conversacion = pd.concat([df_originales, df_quotes], ignore_index=True)
+        
+        if df_conversacion.empty:
+            st.warning("No hay 'conversación' (originales + quotes) en el rango seleccionado.")
+            st.stop()
+        
+        # ---------------------------------------------------------
+        # 4.2) Sentimiento por fila SOLO en conversación (originales + quotes)
+        #     (acá sí tiene sentido por fila porque el texto cambia)
+        # ---------------------------------------------------------
+        sent_hf_conv = []
+        score_hf_conv = []
+        
+        for txt in df_conversacion["Texto"].tolist():
+            s, sc = sentimiento_hf(txt)
+            sent_hf_conv.append(s)
+            score_hf_conv.append(sc)
+        
+        df_conversacion["Sentimiento_HF"] = sent_hf_conv
+        df_conversacion["Score_HF"] = score_hf_conv
+        df_conversacion["Sentimiento_Lex"] = df_conversacion["Texto"].apply(calcular_sentimiento)
+        df_conversacion["Sentimiento"] = df_conversacion["Sentimiento_HF"].fillna(df_conversacion["Sentimiento_Lex"])
+        
+        metodo_sent_conv = "IA (Hugging Face)" if df_conversacion["Sentimiento_HF"].notna().any() else "Léxico (fallback)"
+        
+        # ---------------------------------------------------------
+        # 4.3) Sentimiento para RT puros:
+        #     ✅ “1 sola vez por tweet original” (no por cada RT)
+        #     - Agrupamos RT puros por original_id
+        #     - Para cada original_id, calculamos sentimiento UNA sola vez usando texto del original (si lo tenemos)
+        #       Si no lo tenemos, usamos el texto del primer RT (suele ser idéntico en RT puros)
+        # ---------------------------------------------------------
+        def sentimiento_unico_para_texto(texto: str):
+            s, sc = sentimiento_hf(texto)
+            if s is None:
+                s = calcular_sentimiento(texto)
+                sc = None
+            return s, sc
+        
+        # Mapa id -> texto del tweet original (solo si el original está dentro del rango y lo capturamos)
+        texto_por_tweet_id = {}
+        if not df_originales.empty:
+            # En originales, tweet_id es su propio id
+            for _id, _txt in zip(df_originales["tweet_id"].tolist(), df_originales["Texto"].tolist()):
+                if _id and isinstance(_txt, str) and _txt.strip():
+                    texto_por_tweet_id[str(_id)] = _txt
+        
+        # Construimos df_rt_agregado: una fila por original_id (aunque haya 500 RT)
+        df_rt_agregado = pd.DataFrame()
+        if not df_rt_puros.empty:
+            tmp = df_rt_puros.copy()
+            tmp = tmp[tmp["original_id"].notna()].copy()
+        
+            if not tmp.empty:
+                # Sentimiento 1 sola vez por original_id
+                registros = []
+                for original_id, g in tmp.groupby("original_id"):
+                    # Elegimos texto para “ese original”
+                    texto_base = texto_por_tweet_id.get(str(original_id))
+                    if not texto_base:
+                        # fallback: el texto del primer RT puro
+                        texto_base = str(g.iloc[0].get("Texto", ""))
+        
+                    s_uni, sc_uni = sentimiento_unico_para_texto(texto_base)
+        
+                    registros.append({
+                        "original_id": str(original_id),
+                        "Texto_base_original": texto_base,
+                        "Sentimiento_original": s_uni,
+                        "Score_original": sc_uni
+                    })
+        
+                df_rt_sent = pd.DataFrame(registros)
+                df_rt_agregado = (
+                    tmp.groupby("original_id")
+                       .agg(
+                           RT_puros_en_rango=("tweet_id", "count"),
+                           Likes_total_amplificacion=("Likes", "sum"),
+                           Retweets_total_amplificacion=("Retweets", "sum"),
+                           Fecha_ultima_amplificacion=("Fecha", "max"),
+                       )
+                       .reset_index()
+                )
+        
+                df_rt_agregado["original_id"] = df_rt_agregado["original_id"].astype(str)
+                df_rt_agregado = df_rt_agregado.merge(df_rt_sent, on="original_id", how="left")
+        
+        # ---------------------------------------------------------
+        # 4.4) Agregar QUOTES como amplificación (pero OJO: quotes también son conversación)
+        #     Para amplificación necesitamos sumar:
+        #       Amplificación_total = RT_puros + Quotes
+        #     y guardar:
+        #       Quotes_en_rango, Likes_total_quotes, etc.
+        # ---------------------------------------------------------
+        df_quotes_agregado = pd.DataFrame()
+        if not df_quotes.empty:
+            qtmp = df_quotes.copy()
+            qtmp = qtmp[qtmp["original_id"].notna()].copy()
+        
+            if not qtmp.empty:
+                df_quotes_agregado = (
+                    qtmp.groupby("original_id")
+                        .agg(
+                            Quotes_en_rango=("tweet_id", "count"),
+                            Likes_total_quotes=("Likes", "sum"),
+                            Retweets_total_quotes=("Retweets", "sum"),
+                            Fecha_ultima_quote=("Fecha", "max"),
+                        )
+                        .reset_index()
+                )
+                df_quotes_agregado["original_id"] = df_quotes_agregado["original_id"].astype(str)
+        
+        # ---------------------------------------------------------
+        # 4.5) Construir df_amplificacion (una sola tabla, 1 fila por tweet original)
+        #     Incluye:
+        #       - RT puros + Quotes (en rango)
+        #       - Sentimiento_dominante ponderado por (RT_puros + Quotes)  ✅ (tu decisión)
+        #       - Fecha = Fecha_última_amplificación (tu decisión)
+        #       - Likes = Likes_total_amplificación (tu decisión)
+        #     Nota: aquí además guardamos Ubicación/Confianza como “dominante” (modo)
+        # ---------------------------------------------------------
+        df_amplificacion = pd.DataFrame()
+        
+        if (not df_rt_agregado.empty) or (not df_quotes_agregado.empty):
+            # Base = unión por original_id
+            base = df_rt_agregado.copy()
+            if base.empty:
+                base = pd.DataFrame({"original_id": df_quotes_agregado["original_id"].astype(str)})
+        
+            base["original_id"] = base["original_id"].astype(str)
+        
+            base = base.merge(df_quotes_agregado, on="original_id", how="outer")
+        
+            # Rellenos
+            for c in ["RT_puros_en_rango", "Likes_total_amplificacion", "Retweets_total_amplificacion"]:
+                if c not in base.columns:
+                    base[c] = 0
+                base[c] = pd.to_numeric(base[c], errors="coerce").fillna(0)
+        
+            for c in ["Quotes_en_rango", "Likes_total_quotes", "Retweets_total_quotes"]:
+                if c not in base.columns:
+                    base[c] = 0
+                base[c] = pd.to_numeric(base[c], errors="coerce").fillna(0)
+        
+            # Amplificación total (en rango)
+            base["Amplificacion_total_en_rango"] = base["RT_puros_en_rango"] + base["Quotes_en_rango"]
+        
+            # Fecha última amplificación (recomendado)
+            # - Preferimos max entre (Fecha_ultima_amplificacion, Fecha_ultima_quote)
+            base["Fecha_ultima_amplificacion"] = pd.to_datetime(base.get("Fecha_ultima_amplificacion"), errors="coerce")
+            base["Fecha_ultima_quote"] = pd.to_datetime(base.get("Fecha_ultima_quote"), errors="coerce")
+            base["Fecha"] = base[["Fecha_ultima_amplificacion", "Fecha_ultima_quote"]].max(axis=1)
+        
+            # Likes totales amplificación (RT + quote)
+            base["Likes"] = base["Likes_total_amplificacion"] + base["Likes_total_quotes"]
+        
+            # Retweets totales amplificación (RT + quote) (métrica adicional)
+            base["Retweets"] = base["Retweets_total_amplificacion"] + base["Retweets_total_quotes"]
+        
+            # ---------------------------
+            # Sentimiento dominante ponderado (RT_puros + quotes)
+            # ---------------------------
+            # 1) Sentimiento del original (ya calculado 1 vez) -> viene de df_rt_agregado
+            # 2) Sentimiento de quotes: se calcula por fila en df_conversacion (quotes están ahí)
+            #
+            # Ponderación:
+            # - Peso RT = RT_puros_en_rango (todos repiten el mismo sentimiento del original)
+            # - Peso quotes = se usa sentimiento de cada quote y se suma 1 por quote
+            #
+            # Resultado: Sentimiento_dominante = el que tenga mayor peso total.
+            # Score_dominante: (peso_ganador / peso_total) aprox.
+            sentiment_map = {}
+        
+            # A) Contribución RT (sentimiento_original) con peso RT_puros_en_rango
+            if not df_rt_agregado.empty:
+                for _, row in df_rt_agregado.iterrows():
+                    oid = str(row.get("original_id"))
+                    sent = row.get("Sentimiento_original")
+                    w = float(row.get("RT_puros_en_rango", 0) or 0)
+                    if not oid:
+                        continue
+                    sentiment_map.setdefault(oid, {"Positivo": 0.0, "Neutral": 0.0, "Negativo": 0.0})
+                    if sent in sentiment_map[oid]:
+                        sentiment_map[oid][sent] += w
+        
+            # B) Contribución Quotes (cada quote suma 1 con su sentimiento)
+            if not df_quotes.empty:
+                # Necesitamos el sentimiento de cada quote (ya está en df_conversacion; filtramos solo tipo Quote)
+                df_quotes_sent = df_conversacion[df_conversacion["tipo"] == "Quote"].copy()
+                if not df_quotes_sent.empty:
+                    for _, r in df_quotes_sent.iterrows():
+                        oid = str(r.get("original_id"))
+                        sent = r.get("Sentimiento")
+                        if not oid:
+                            continue
+                        sentiment_map.setdefault(oid, {"Positivo": 0.0, "Neutral": 0.0, "Negativo": 0.0})
+                        if sent in sentiment_map[oid]:
+                            sentiment_map[oid][sent] += 1.0  # cada quote pesa 1
+        
+            # Resolver dominante
+            dominantes = []
+            for _, row in base.iterrows():
+                oid = str(row.get("original_id"))
+                weights = sentiment_map.get(oid, {"Positivo": 0.0, "Neutral": 0.0, "Negativo": 0.0})
+                total_w = sum(weights.values()) if weights else 0.0
+                if total_w <= 0:
+                    dominantes.append(("Neutral", None))
+                    continue
+                dom = max(weights.items(), key=lambda kv: kv[1])[0]
+                score_dom = round(float(weights[dom] / total_w), 3) if total_w else None
+                dominantes.append((dom, score_dom))
+        
+            base["Sentimiento"] = [d[0] for d in dominantes]
+            base["Score_sent_dominante"] = [d[1] for d in dominantes]
+        
+            # ---------------------------
+            # Ubicación/Confianza “dominante” (modo) tomado de retweets+quotes
+            # ---------------------------
+            # Usamos TODAS las filas de df_raw donde original_id = X (RT o Quote)
+            def modo_safe(series):
+                if series is None or len(series) == 0:
+                    return None
+                s = series.dropna()
+                if s.empty:
+                    return None
+                try:
+                    return s.mode().iloc[0]
+                except Exception:
+                    return s.iloc[0]
+        
+            if not df_raw.empty:
+                # Tomamos solo amplificaciones (RT+Quote) para inferir ubicación del “público que amplifica”
+                amp_rows = df_raw[df_raw["tipo"].isin(["RT", "Quote"]) & df_raw["original_id"].notna()].copy()
+        
+                ubis = []
+                confs = []
+                for oid in base["original_id"].astype(str).tolist():
+                    g = amp_rows[amp_rows["original_id"].astype(str) == str(oid)]
+                    ubis.append(modo_safe(g["Ubicación inferida"]) if not g.empty else None)
+                    confs.append(modo_safe(g["Confianza"]) if not g.empty else None)
+        
+                base["Ubicación inferida"] = ubis
+                base["Confianza"] = confs
+        
+            # ---------------------------
+            # Link “Abrir” al tweet original:
+            # - Si el original está en df_originales: usamos su URL (ideal)
+            # - Si no: construimos URL genérica por id (X igual abre por id si existe)
+            # ---------------------------
+            url_por_original_id = {}
+            if not df_originales.empty:
+                for _id, _url in zip(df_originales["tweet_id"].tolist(), df_originales["URL"].tolist()):
+                    if _id:
+                        url_por_original_id[str(_id)] = _url
+        
+            base["URL"] = base["original_id"].astype(str).apply(lambda oid: url_por_original_id.get(oid, f"https://x.com/i/web/status/{oid}"))
+        
+            # Texto del original:
+            # - Si lo tenemos en df_rt_agregado (Texto_base_original), úsalo
+            # - Si no, vacío
+            if "Texto_base_original" not in base.columns:
+                base["Texto_base_original"] = ""
+        
+            df_amplificacion = base.copy()
+        
+        # ---------------------------------------------------------
+        # 4.6) Mensajes de control (para neófitos)
+        # ---------------------------------------------------------
+        st.caption(
+            f"Sentimiento conversación calculado en {len(df_conversacion)} fila(s) (Originales + Quotes). "
+            f"RT puros se agregan por tweet original para NO inflar el sentimiento."
+        )
+        
+        st.caption(
+            f"Método de sentimiento (conversación): {metodo_sent_conv}. "
+            f"En amplificación: dominante ponderado por (RT_puros + Quotes)."
+        )
+        
+        # Guardamos dfs clave para PARTE 5/6 (KPIs + tablas + gráficos)
+        st.session_state["df_conversacion_rows"] = int(len(df_conversacion))
+        st.session_state["df_amplificacion_rows"] = int(len(df_amplificacion)) if df_amplificacion is not None else 0
+
                         
-        # ============================================================
-        # ✅ BLOQUE UNIFICADO (KPI + Resumen ejecutivo + Gráficos + Tabla)            
-        # - df armado con columnas: Texto, Fecha, Likes, Retweets, Autor, URL, Ubicación inferida...
-        # - df["Sentimiento"] ya calculado (HF + fallback)      
-        # ============================================================
-            
+        # =========================
+        # PARTE 5 — KPIs + Alertas + Resumen ejecutivo (Gemini) + Tablero visual (sin inflar)
+        # =========================
+        # ✅ DÓNDE PEGAR:
+        # Pega este bloque JUSTO DESPUÉS de la PARTE 4
+        # (después de construir df_conversacion y df_amplificacion)
+        # y ANTES de mostrar las 4 tablas (eso será PARTE 6).
+        
+        # ---------------------------------------------------------
+        # 5.1) KPIs base (separados: Conversación vs Amplificación)
+        # ---------------------------------------------------------
+        st.markdown("## 🧾 Panel ejecutivo (mejorado)")
+        
         # Asegurar tipos
-        df["Fecha"] = pd.to_datetime(df["Fecha"], errors="coerce")
-        df["Likes"] = pd.to_numeric(df["Likes"], errors="coerce").fillna(0)
-        df["Retweets"] = pd.to_numeric(df["Retweets"], errors="coerce").fillna(0)
-        df["Interacción"] = df["Likes"] + df["Retweets"]
-            
-        total = len(df)
-        pct_pos = round((df["Sentimiento"] == "Positivo").mean() * 100, 1) if total else 0
-        pct_neu = round((df["Sentimiento"] == "Neutral").mean() * 100, 1) if total else 0
-        pct_neg = round((df["Sentimiento"] == "Negativo").mean() * 100, 1) if total else 0
-        interaccion_total = int(df["Interacción"].sum()) if total else 0
-        interaccion_prom = round(df["Interacción"].mean(), 2) if total else 0
-            
-        # Narrativas dominantes (top términos)
+        df_conversacion["Fecha"] = pd.to_datetime(df_conversacion["Fecha"], errors="coerce")
+        df_conversacion["Likes"] = pd.to_numeric(df_conversacion["Likes"], errors="coerce").fillna(0)
+        df_conversacion["Retweets"] = pd.to_numeric(df_conversacion["Retweets"], errors="coerce").fillna(0)
+        df_conversacion["Interacción"] = pd.to_numeric(df_conversacion.get("Interacción", 0), errors="coerce").fillna(0)
+        
+        conv_total = int(len(df_conversacion))
+        
+        # % sentimiento SOLO conversación (no RT puros)
+        pct_pos = round((df_conversacion["Sentimiento"] == "Positivo").mean() * 100, 1) if conv_total else 0
+        pct_neu = round((df_conversacion["Sentimiento"] == "Neutral").mean() * 100, 1) if conv_total else 0
+        pct_neg = round((df_conversacion["Sentimiento"] == "Negativo").mean() * 100, 1) if conv_total else 0
+        
+        conv_interaccion_total = int(df_conversacion["Interacción"].sum()) if conv_total else 0
+        conv_interaccion_prom = round(df_conversacion["Interacción"].mean(), 2) if conv_total else 0
+        
+        # Narrativas dominantes (top términos) SOLO conversación
         todas_palabras = []
-        for t in df["Texto"].tolist():
+        for t in df_conversacion["Texto"].tolist():
             todas_palabras.extend(limpiar_texto(t))
-        top_terminos = pd.Series(todas_palabras).value_counts().head(15)
+        
+        top_terminos = pd.Series(todas_palabras).value_counts().head(15) if len(todas_palabras) else pd.Series([], dtype=int)
         top_terminos_list = top_terminos.index.tolist()
         narrativa_1 = top_terminos_list[0] if len(top_terminos_list) else "N/A"
-            
-        # Top post influyente
-        top_post = df.sort_values("Interacción", ascending=False).head(1)
-        if len(top_post) > 0:
-            top_autor = str(top_post.iloc[0].get("Autor", "N/A"))            
-        else:
-            top_autor = "N/A"
-            
-        # Temperatura (semáforo simple)
+        
+        # Top autor conversación (por Interacción)
+        top_post_conv = df_conversacion.sort_values("Interacción", ascending=False).head(1)
+        top_autor_conv = str(top_post_conv.iloc[0].get("Autor", "N/A")) if len(top_post_conv) else "N/A"
+        
+        # Temperatura (solo conversación)
         if pct_neg >= 40:
             temperatura = "🔴 Riesgo reputacional"
         elif pct_pos >= 60 and pct_neg < 25:
             temperatura = "🟢 Clima favorable"
         else:
             temperatura = "🟡 Mixto / neutro"
-
-        # Armamos insumos compactos (evita enviar 50 textos completos)
- 
-        ejemplos = (
-            df.sort_values("Interacción", ascending=False)
-                .head(10)["Texto"]
-                .apply(lambda t: (t[:240] + "…") if isinstance(t, str) and len(t) > 240 else t)
-                .tolist()
-        )
-
-        payload = {
-            "query": query,
-            "time_range": time_range,
-            "volumen": int(total),
-            "sentimiento_pct": {"positivo": pct_pos, "neutral": pct_neu, "negativo": pct_neg},
-            "temperatura": temperatura,
-            "top_terminos": top_terminos_list[:10],
-            "ejemplos_top_interaccion": ejemplos,
-            "nota_ubicacion": "Ubicación inferida desde perfil/bio; no es geolocalización exacta."
-        }
-
-        # ✅ Regla simple: si hay muy pocos posts, Gemini suele dar salida pobre.
-        # En ese caso saltamos directo al resumen por reglas.
-       
-        bullets_ia, gemini_status = resumen_ejecutivo_gemini(payload, debug=debug_gemini)
-
-        # ─────────────────────────────
-        # 🔥 TOP POSTS + DETALLE (compacto)
-        # ─────────────────────────────
-            
-        # Top 10 posts por interacción
-        top_posts = df.sort_values("Interacción", ascending=False).head(10).copy()
-        top_posts["Link"] = top_posts["URL"].apply(lambda u: f'<a href="{u}" target="_blank">Abrir</a>' if u else "")
-            
-        st.markdown("### 🔥 Top 10 posts por interacción (Likes + Retweets)")
-        st.markdown(
-            top_posts[["Autor", "Fecha", "Likes", "Retweets", "Interacción", "Texto", "Link"]]
-            .to_html(escape=False, index=False),
-            unsafe_allow_html=True
-        )
-                
-        # Tabla completa en expander (optimiza espacio)
-        with st.expander("📄 Ver tabla completa de resultados (detalle)"):
-            df_full = df.copy()
-            df_full["Link"] = df_full["URL"].apply(lambda u: f'<a href="{u}" target="_blank">Abrir</a>' if u else "")
-            st.markdown(
-                df_full[["Autor", "Fecha", "Likes", "Retweets", "Sentimiento", "Ubicación inferida", "Confianza", "Texto", "Link"]]
-                .to_html(escape=False, index=False),
-                unsafe_allow_html=True
-            )
-        st.caption("Nota: la ubicación NO es exacta; es una inferencia basada en 'location' del perfil y/o bio. Úsala solo como aproximación.")
-            
-        # ─────────────────────────────
-        # 🧮 PANEL EJECUTIVO (KPI + Alertas)
-        # ─────────────────────────────
-        st.markdown("## 🧾 Panel ejecutivo")
-            
+        
+        # Amplificación (agregada por tweet original)
+        amp_total_filas = int(len(df_amplificacion)) if df_amplificacion is not None else 0
+        amp_total_eventos = 0
+        amp_likes_total = 0
+        amp_rt_puros_total = 0
+        amp_quotes_total = 0
+        
+        if df_amplificacion is not None and not df_amplificacion.empty:
+            amp_total_eventos = int(df_amplificacion["Amplificacion_total_en_rango"].sum())
+            amp_likes_total = int(df_amplificacion["Likes"].sum())
+            amp_rt_puros_total = int(df_amplificacion["RT_puros_en_rango"].sum())
+            amp_quotes_total = int(df_amplificacion["Quotes_en_rango"].sum())
+        
+        # KPI layout (neófito-friendly)
         k1, k2, k3, k4, k5, k6 = st.columns(6)
-        k1.metric("Volumen", f"{total}")
+        k1.metric("Conversación (posts)", f"{conv_total}")
         k2.metric("Temperatura", temperatura)
-        k3.metric("% Negativo", f"{pct_neg}%")
-        k4.metric("Interacción", f"{interaccion_total}")
-        k5.metric("Top autor", top_autor)
+        k3.metric("% Negativo (conv.)", f"{pct_neg}%")
+        k4.metric("Interacción (conv.)", f"{conv_interaccion_total}")
+        k5.metric("Amplificación (eventos)", f"{amp_total_eventos}")
         k6.metric("Narrativa #1", narrativa_1)
-            
+        
         st.caption(
-            f"Detalle rápido: Pos {pct_pos}% | Neu {pct_neu}% | Neg {pct_neg}%. "
-            f"Interacción promedio/post: {interaccion_prom}."
+            f"Conversación: Pos {pct_pos}% | Neu {pct_neu}% | Neg {pct_neg}%. "
+            f"Interacción promedio/post: {conv_interaccion_prom}. "
+            f"Amplificación: RT puros={amp_rt_puros_total} | Quotes={amp_quotes_total} | Total={amp_total_eventos}."
         )
-            
-        # Alertas (reglas MVP)
+        
+        # ---------------------------------------------------------
+        # 5.2) Alertas (actualizadas con amplificación)
+        # ---------------------------------------------------------
         alertas = []
-        if pct_neg >= 40:
-            alertas.append("⚠️ Alto componente negativo. Priorizar aclaraciones con datos verificables y mensajes de contención.")
-        if interaccion_total >= 500 and total >= 10:
-            alertas.append("📣 Alta interacción total: posible amplificación/viralización. Vigilar fuentes y evolución del volumen.")
+        
+        # Alerta reputacional (conv.)
+        if pct_neg >= 40 and conv_total >= 10:
+            alertas.append("⚠️ Conversación con componente negativo alto. Preparar mensaje de contención y aclaración con datos verificables.")
+        elif pct_neg >= 30 and conv_total >= 10:
+            alertas.append("🟡 Conversación con componente negativo relevante. Vigilar eventos gatillo y cuentas amplificadoras.")
+        
+        # Alerta por amplificación
+        if amp_total_eventos >= 300:
+            alertas.append("📣 Alta amplificación detectada (RT + Quotes). Revisar el TOP amplificados y activar monitoreo continuo.")
+        elif amp_total_eventos >= 100:
+            alertas.append("📢 Amplificación moderada. Confirmar si proviene de pocos posts “faro” o es dispersa.")
+        
+        # Alerta por muestra pequeña (conv.)
+        if conv_total < 5:
+            alertas.append("ℹ️ Muestra pequeña en conversación. Interpretar con cautela (señal temprana, no representativa).")
+        
         if alertas:
             st.markdown("### 🚨 Alertas")
             for a in alertas:
                 st.warning(a)
-        st.caption(f"Método de sentimiento: {metodo_sent}. Score HF (0–1) es confianza aproximada cuando hay IA.")
-        # ─────────────────────────────
-        # 🧠 RESUMEN EJECUTIVO (sin repetir números)
-        # ─────────────────────────────
-        st.markdown("## ⭐ Resumen ejecutivo")
-
-        if bullets_ia:
-            st.caption("Generado con IA (Gemini). Si falla, se usa el resumen por reglas.")
-            st.markdown(bullets_ia)      
-        else:
-            st.caption("IA no disponible o falló. Mostrando resumen por reglas.")
-                                    
-            # Riesgos / oportunidades (reglas simples, sin repetir métricas)
-            riesgo_bullets = []
-            if pct_neg >= 40:
-                riesgo_bullets.append("Riesgo reputacional alto: conversación con tono negativo predominante.")
-            elif pct_neg >= 30:
-                riesgo_bullets.append("Riesgo reputacional moderado: presencia relevante de negativos que puede escalar con eventos gatillo.")
-            else:
-                riesgo_bullets.append("Riesgo reputacional bajo en el periodo observado, sin señales fuertes de escalamiento.")
-                
-            oportunidad_bullets = []
-            if pct_pos > pct_neg:
-                oportunidad_bullets.append("Clima con espacio para reforzar narrativa: responder con información clara, oportuna y verificable.")
-            else:
-                oportunidad_bullets.append("Oportunidad de aclaración: reducir ambigüedad con FAQ, cifras y vocería consistente.")
-                
-            # Mensajes sugeridos (framing informativo, no propaganda)
-            mensajes = [
-                "Mensaje sugerido: 'Compartimos información verificable y actualizada sobre el tema, con fuentes y fechas claras.'",
-                "Mensaje sugerido: 'Si tienes dudas, revisa este resumen: qué se sabe, qué no se sabe aún y próximos hitos.'",
-            ]
-            if pct_neg >= 30:
-                mensajes.append("Mensaje sugerido: 'Entendemos la preocupación. Aclaramos los puntos críticos y cómo se atenderán.'")
-                
-            # Qué monitorear mañana (operativo)
-            monitoreo = [
-                "Monitorear si aparece un nuevo hashtag o término dominante (cambio de agenda).",
-                "Monitorear si sube la proporción de negativos o se concentra en una narrativa específica.",
-                "Monitorear cuentas/post con alta interacción (posibles amplificadores).",
-                "Monitorear señales regionales (ubicación inferida) solo como indicio, no como dato duro.",
-            ]
-                
-            # Construir bullets (8–12)
-            bullets = []
-            bullets.append(f"Se detecta una conversación con narrativa dominante alrededor de: {', '.join(top_terminos_list[:6]) if top_terminos_list else 'sin términos dominantes claros'}.")
-            bullets.extend(riesgo_bullets)
-            bullets.extend(oportunidad_bullets)
-            bullets.extend(mensajes[:2])
-            bullets.append("Acción táctica: preparar 3 respuestas estándar (datos, procesos, próximos pasos) y mantener consistencia.")
-            bullets.append("Acción táctica: si el volumen aumenta, publicar una aclaración breve + enlace a información completa.")
-            bullets.extend(monitoreo[:3])
-                
-            # Mostrar en pantalla (máximo 12)
-            for b in bullets[:12]:
-                st.markdown(f"- {b}")
-            
-        # Advertencia metodológica (una sola vez, corta)
-        st.caption(
-            "Advertencia metodológica: señal temprana basada en publicaciones públicas de X; sentimiento automatizado (IA/fallback) "
-            "y ubicación inferida desde perfil/bio (no geolocalización exacta). No representa a toda la población."
+        
+        st.caption(f"Método de sentimiento (conversación): {metodo_sent_conv}. En RT puros: sentimiento 1 vez por original (no se duplica).")
+        
+        # ---------------------------------------------------------
+        # 5.3) INSUMOS para Gemini (incluye conversación + TOP amplificados)
+        # ---------------------------------------------------------
+        # Ejemplos top conversación (evita mandar todo)
+        ejemplos_conv = (
+            df_conversacion.sort_values("Interacción", ascending=False)
+            .head(8)["Texto"]
+            .apply(lambda t: (t[:240] + "…") if isinstance(t, str) and len(t) > 240 else t)
+            .tolist()
         )
-            
-            # ─────────────────────────────
-            # 📊 TABLERO VISUAL (Plotly)
-            # ─────────────────────────────
-        st.markdown("## 📊 Tablero visual")
-            
-        if df["Fecha"].isna().all():
+        
+        # Ejemplos top amplificados (texto del tweet original amplificado)
+        ejemplos_amp = []
+        if df_amplificacion is not None and not df_amplificacion.empty:
+            top_amp = df_amplificacion.sort_values("Amplificacion_total_en_rango", ascending=False).head(8)
+            for _, r in top_amp.iterrows():
+                txt = r.get("Texto_base_original", "") or ""
+                txt = (txt[:240] + "…") if isinstance(txt, str) and len(txt) > 240 else txt
+                if txt:
+                    ejemplos_amp.append(txt)
+        
+        payload = {
+            "query": query,
+            "time_range": time_range,
+        
+            "conversacion": {
+                "volumen_posts": int(conv_total),
+                "sentimiento_pct": {"positivo": pct_pos, "neutral": pct_neu, "negativo": pct_neg},
+                "top_terminos": top_terminos_list[:10],
+                "ejemplos_top_interaccion": ejemplos_conv,
+            },
+        
+            "amplificacion": {
+                "eventos_total": int(amp_total_eventos),
+                "rt_puros_total": int(amp_rt_puros_total),
+                "quotes_total": int(amp_quotes_total),
+                "likes_total": int(amp_likes_total),
+                "ejemplos_top_amplificados": ejemplos_amp[:8],
+                "nota": "Amplificación agregada por tweet original (una fila por post original)."
+            },
+        
+            "temperatura": temperatura,
+            "nota_ubicacion": "Ubicación inferida desde perfil/bio; no es geolocalización exacta."
+        }
+        
+        # Generar resumen (Gemini)
+        st.markdown("## ⭐ Resumen ejecutivo")
+        
+        bullets_ia, gemini_status = resumen_ejecutivo_gemini(payload, debug=debug_gemini)
+        
+        if bullets_ia:
+            st.caption(f"Generado con IA (Gemini). Estado: {gemini_status}")
+            st.markdown(bullets_ia)
+        else:
+            st.caption(f"IA no disponible o falló. Estado: {gemini_status}. Mostrando resumen por reglas.")
+        
+            # Resumen por reglas (sin repetir números)
+            narrativa_txt = ", ".join(top_terminos_list[:6]) if top_terminos_list else "sin términos dominantes claros"
+            if pct_neg >= 40:
+                riesgo_txt = "Riesgo reputacional alto: conversación con tono negativo predominante."
+            elif pct_neg >= 30:
+                riesgo_txt = "Riesgo reputacional moderado: negativos relevantes que pueden escalar con un evento gatillo."
+            else:
+                riesgo_txt = "Riesgo reputacional bajo en el periodo observado, sin señales fuertes de escalamiento."
+        
+            if amp_total_eventos >= 300:
+                amp_txt = "Amplificación alta: pocos posts pueden estar actuando como “faro” y concentrando difusión."
+            elif amp_total_eventos >= 100:
+                amp_txt = "Amplificación moderada: revisar top amplificados para entender qué está empujando la conversación."
+            else:
+                amp_txt = "Amplificación baja o normal: difusión acotada en el periodo."
+        
+            oportunidad_txt = (
+                "Oportunidad: publicar aclaración breve con datos verificables y enlace a información completa, "
+                "y preparar respuestas estándar para preguntas recurrentes."
+            )
+        
+            st.markdown(f"**Narrativa:** Se observa una conversación centrada en {narrativa_txt}.")
+            st.markdown(f"**Riesgos:** {riesgo_txt} Además, {amp_txt}.")
+            st.markdown(f"**Oportunidades:** {oportunidad_txt}")
+        
+        # Advertencia metodológica (1 sola vez)
+        st.caption(
+            "Advertencia metodológica: señal temprana basada en publicaciones públicas de X; sentimiento automatizado "
+            "(IA/fallback) y ubicación inferida desde perfil/bio (no geolocalización exacta). No representa a toda la población."
+        )
+        
+        # ---------------------------------------------------------
+        # 5.4) Tablero visual (Plotly) — SOLO conversación para sentimiento
+        # ---------------------------------------------------------
+        st.markdown("## 📊 Tablero visual (mejorado)")
+        
+        if df_conversacion["Fecha"].isna().all():
             st.warning("No se pudo interpretar fechas para graficar tendencia.")
         else:
-            df["Día"] = df["Fecha"].dt.date.astype(str)
-            
-            # 1) Volumen por día
-            vol_por_dia = df.groupby("Día").size().reset_index(name="Volumen")
-            fig_vol = px.line(vol_por_dia, x="Día", y="Volumen", markers=True, title="📈 Volumen de publicaciones por día")
+            df_conversacion["Día"] = df_conversacion["Fecha"].dt.date.astype(str)
+        
+            # 1) Volumen conversación por día
+            vol_por_dia = df_conversacion.groupby("Día").size().reset_index(name="Volumen")
+            fig_vol = px.line(vol_por_dia, x="Día", y="Volumen", markers=True, title="📈 Volumen de conversación por día (Originales + Quotes)")
             st.plotly_chart(fig_vol, use_container_width=True)
-            
-            # 2) Sentimiento (donut)
-            sent_counts = df["Sentimiento"].value_counts().reset_index()
+        
+            # 2) Sentimiento (donut) — conversación
+            sent_counts = df_conversacion["Sentimiento"].value_counts().reset_index()
             sent_counts.columns = ["Sentimiento", "Cantidad"]
-            fig_sent = px.pie(sent_counts, names="Sentimiento", values="Cantidad", hole=0.45, title="🧁 Distribución de sentimiento")
+            fig_sent = px.pie(sent_counts, names="Sentimiento", values="Cantidad", hole=0.45, title="🧁 Distribución de sentimiento (conversación)")
             st.plotly_chart(fig_sent, use_container_width=True)
-            st.caption(f"Método de sentimiento: {metodo_sent}. Score HF (0–1) es confianza aproximada cuando hay IA.")
-            
-            # 3) Sentimiento por día (apilado)
-            sent_por_dia = df.groupby(["Día", "Sentimiento"]).size().reset_index(name="Cantidad")
+            st.caption(f"Método de sentimiento (conversación): {metodo_sent_conv}.")
+        
+            # 3) Sentimiento por día (apilado) — conversación
+            sent_por_dia = df_conversacion.groupby(["Día", "Sentimiento"]).size().reset_index(name="Cantidad")
             fig_sent_dia = px.bar(
                 sent_por_dia, x="Día", y="Cantidad", color="Sentimiento",
-                barmode="stack", title="📆 Sentimiento por día (barras apiladas)"
+                barmode="stack", title="📆 Sentimiento por día (conversación)"
             )
             st.plotly_chart(fig_sent_dia, use_container_width=True)
-            
-            # 4) Top términos
-            top_terminos_df = top_terminos.reset_index()
-            top_terminos_df.columns = ["Término", "Frecuencia"]
-            fig_terms = px.bar(
-                top_terminos_df, x="Frecuencia", y="Término", orientation="h",
-                title="🏷️ Top términos dominantes (limpio de stopwords)"
+        
+            # 4) Top términos — conversación
+            if not top_terminos.empty:
+                top_terminos_df = top_terminos.reset_index()
+                top_terminos_df.columns = ["Término", "Frecuencia"]
+                fig_terms = px.bar(
+                    top_terminos_df, x="Frecuencia", y="Término", orientation="h",
+                    title="🏷️ Top términos dominantes (conversación, limpio de stopwords)"
+                )
+                st.plotly_chart(fig_terms, use_container_width=True)
+        
+        # ✅ Guardamos payload por si luego quieres exportar
+        st.session_state["payload_gemini"] = payload
+
+        # =========================
+        # PARTE 6 — 4 TABLAS FINALES (Originales + Amplificación) con "Abrir"
+        # =========================
+        # ✅ Requisitos previos (de PARTE 3–5):
+        # - df_originales: solo posts originales dentro del rango (filas por tweet original)
+        # - df_conversacion: originales + quotes (con Sentimiento por fila, Ubicación, Confianza, etc.)
+        # - df_amplificacion: agregada por tweet ORIGINAL amplificado
+        #   Debe contener (mínimo): original_id, Texto_original, URL_original,
+        #   Ampl_total (RT_puros+Quotes), RT_puros_count, Quotes_count,
+        #   Fecha_última_amplificación, Likes_total_amplificación,
+        #   Sentimiento_dominante, Ubicación_dominante, Confianza_dominante
+        #
+        # Si tus nombres difieren, ajusta SOLO los nombres de columna en los selects.
+        
+        st.markdown("## 📌 Resultados en tablas (4 vistas)")
+        
+        def _make_open_link(url: str) -> str:
+            return f'<a href="{url}" target="_blank">Abrir</a>' if isinstance(url, str) and url else ""
+        
+        def render_table(df_show: pd.DataFrame, title: str, cols: list[str], top: int | None = None):
+            st.markdown(f"### {title}")
+            if df_show is None or df_show.empty:
+                st.info("No hay datos para mostrar en esta tabla con los filtros actuales.")
+                return
+        
+            _df = df_show.copy()
+        
+            # Top N si aplica
+            if isinstance(top, int) and top > 0:
+                _df = _df.head(top).copy()
+        
+            # Link HTML "Abrir"
+            if "Link" in cols:
+                if "URL" in _df.columns:
+                    _df["Link"] = _df["URL"].apply(_make_open_link)
+                elif "URL_original" in _df.columns:
+                    _df["Link"] = _df["URL_original"].apply(_make_open_link)
+                else:
+                    _df["Link"] = ""
+        
+            # Mostrar
+            st.markdown(
+                _df[cols].to_html(escape=False, index=False),
+                unsafe_allow_html=True
             )
-            st.plotly_chart(fig_terms, use_container_width=True)
+        
+        # ------------------------------------------------------------
+        # TABLA 1) TOP 10 — Tweets originales (no RT) dentro del rango
+        # Ranking sugerido: Interacción = Likes + Retweets (del original)
+        # ------------------------------------------------------------
+        if not df_originales.empty:
+            df_originales_rank = df_originales.sort_values("Interacción", ascending=False).copy()
+        else:
+            df_originales_rank = df_originales.copy()
+        
+        # Asegura URL para originales (ya la tienes como "URL" en PARTE 3)
+        # Columnas: igual que tus tablas actuales + Abrir
+        cols_top_originales = [
+            "Autor", "Fecha", "Likes", "Retweets", "Interacción",
+            "Sentimiento", "Ubicación inferida", "Confianza",
+            "Texto", "Link"
+        ]
+        
+        # Importante: df_originales puede no tener "Sentimiento" si en PARTE 4 solo lo calculaste en df_conversacion.
+        # En ese caso, lo traemos desde df_conversacion (que incluye originales).
+        if "Sentimiento" not in df_originales_rank.columns:
+            if not df_conversacion.empty:
+                sent_map = df_conversacion.set_index("tweet_id")["Sentimiento"].to_dict()
+                df_originales_rank["Sentimiento"] = df_originales_rank["tweet_id"].map(sent_map)
+        
+        render_table(
+            df_originales_rank,
+            "1) 🔥 Top 10 — Posts originales (no RT)",
+            cols=cols_top_originales,
+            top=10
+        )
+        
+        # ------------------------------------------------------------
+        # TABLA 2) TODOS — Tweets originales (no RT) dentro del rango
+        # ------------------------------------------------------------
+        with st.expander("2) 📄 Ver TODOS los posts originales (no RT)"):
+            render_table(
+                df_originales_rank,  # ya rankeado; si prefieres por fecha, cambia aquí
+                "2) 📄 Todos — Posts originales (no RT)",
+                cols=cols_top_originales,
+                top=None
+            )
+        
+        # ------------------------------------------------------------
+        # TABLA 3) TOP 10 — Amplificación (muestra el TWEET ORIGINAL)
+        # Ranking: Ampl_total (RT puros + Quotes) en el rango
+        # ------------------------------------------------------------
+        if not df_amplificacion.empty:
+            df_amp_rank = df_amplificacion.sort_values("Ampl_total", ascending=False).copy()
+        else:
+            df_amp_rank = df_amplificacion.copy()
+        
+        cols_top_amp = [
+            "Fecha_última_amplificación",
+            "Ampl_total", "RT_puros_count", "Quotes_count",
+            "Likes_total_amplificación",
+            "Sentimiento_dominante",
+            "Ubicación_dominante", "Confianza_dominante",
+            "Texto_original",
+            "Link"
+        ]
+        
+        render_table(
+            df_amp_rank,
+            "3) 📣 Top 10 — Amplificación (muestra el tweet ORIGINAL amplificado)",
+            cols=cols_top_amp,
+            top=10
+        )
+        
+        # ------------------------------------------------------------
+        # TABLA 4) TODOS — Amplificación (muestra el TWEET ORIGINAL)
+        # ------------------------------------------------------------
+        with st.expander("4) 📄 Ver TODA la amplificación (tweet ORIGINAL agregado)"):
+            render_table(
+                df_amp_rank,
+                "4) 📄 Toda la amplificación (tweet ORIGINAL agregado)",
+                cols=cols_top_amp,
+                top=None
+            )
+        
+        st.caption(
+            "Nota: En Amplificación, se muestra el tweet ORIGINAL una sola vez por fila. "
+            "Los RT puros y quotes se contabilizan en columnas (RT_puros_count, Quotes_count, Ampl_total). "
+            "El botón 'Abrir' siempre abre el tweet ORIGINAL."
+        )
+
 
