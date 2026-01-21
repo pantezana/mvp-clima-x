@@ -261,7 +261,7 @@ Nada más. No agregues saludos ni conclusiones.
         "contents": [{"parts": [{"text": prompt}]}],
         "generationConfig": {
             "temperature": 0.2,
-            "maxOutputTokens": 350  # 3 párrafos, corto (y reduces MAX_TOKENS)
+            "maxOutputTokens": 800  # 3 párrafos, corto (y reduces MAX_TOKENS)
         }
     }
 
@@ -568,11 +568,8 @@ if st.button("Buscar en X"):
 
             # ✅ Regla simple: si hay muy pocos posts, Gemini suele dar salida pobre.
             # En ese caso saltamos directo al resumen por reglas.
-            if total < 8:
-                bullets_ia = resumen_ejecutivo_gemini(payload, debug=debug_gemini)
-                gemini_status = "Gemini: muestra muy chica (<8). Usando resumen por reglas."
-            else:
-                bullets_ia, gemini_status = resumen_ejecutivo_gemini(payload, debug=debug_gemini)
+       
+            bullets_ia, gemini_status = resumen_ejecutivo_gemini(payload, debug=debug_gemini)
 
             st.caption(gemini_status)
             
