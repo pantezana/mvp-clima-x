@@ -253,10 +253,6 @@ Oportunidades: <explica en un párrafo oportunidades accionables (aclaración, v
 Nada más. No agregues saludos ni conclusiones.
 """.strip()
 
-    if debug:
-        st.text_area("DEBUG: Prompt enviado a Gemini", value=prompt, height=320)
-        st.text_area("DEBUG: Insumos (JSON) enviados", value=insumos_json, height=220)
-
     body = {
         "contents": [{"parts": [{"text": prompt}]}],
         "generationConfig": {
@@ -266,9 +262,6 @@ Nada más. No agregues saludos ni conclusiones.
 
     try:
         r = requests.post(url, headers=headers, json=body, timeout=35)
-
-        if debug:
-            st.text_area("DEBUG: RAW RESPONSE (texto crudo)", value=r.text, height=320)
 
         if r.status_code != 200:
             return None, f"Gemini ERROR {r.status_code}: {r.text[:200]}"
@@ -280,10 +273,6 @@ Nada más. No agregues saludos ni conclusiones.
         text = "\n".join([p.get("text", "") for p in parts if p.get("text")]).strip()
 
         finish = data.get("candidates", [{}])[0].get("finishReason", "")
-
-        if debug:
-            st.caption(f"DEBUG: finishReason = {finish or 'N/A'}")
-            st.text_area("DEBUG: Texto extraído (concatenado)", value=text, height=220)
 
         if not text:
             return None, "Gemini: respuesta vacía"
@@ -399,13 +388,9 @@ if st.button("Buscar en X"):
 
             df = pd.DataFrame(data)
 
-            st.subheader("Resultados encontrados")
-            st.caption("Nota: la ubicación NO es exacta; es una inferencia basada en 'location' del perfil y/o bio. Úsala solo como aproximación.")
+           
 
-            # Mostrar tabla
-            st.dataframe(df, use_container_width=True)
-
-            st.markdown("## 🧠 Resumen Ejecutivo Automático")
+            st.markdown("## 🧠 ANALSIS Y RESULTADOS")
             
             # --- Preparación de texto
             
@@ -499,13 +484,9 @@ if st.button("Buscar en X"):
             st.caption(f"Método de sentimiento: {metodo_sent}. Score HF (0–1) es confianza aproximada cuando hay IA.")
             
             # ============================================================
-            # ✅ BLOQUE UNIFICADO (KPI + Resumen ejecutivo + Gráficos + Tabla)
-            # PÉGALO dentro de tu flujo, después de tener:
+            # ✅ BLOQUE UNIFICADO (KPI + Resumen ejecutivo + Gráficos + Tabla)            
             # - df armado con columnas: Texto, Fecha, Likes, Retweets, Autor, URL, Ubicación inferida...
-            # - df["Sentimiento"] ya calculado (HF + fallback)
-            # - funciones limpiar_texto(...) y stopwords ya definidas
-            # Reemplaza tu bloque actual desde:
-            # "### 📌 Principales hallazgos" hasta el final de gráficos/tabla
+            # - df["Sentimiento"] ya calculado (HF + fallback)      
             # ============================================================
             
             # Asegurar tipos
@@ -570,7 +551,31 @@ if st.button("Buscar en X"):
        
             bullets_ia, gemini_status = resumen_ejecutivo_gemini(payload, debug=debug_gemini)
 
-            st.caption(gemini_status)
+             # ─────────────────────────────
+            # 🔥 TOP POSTS + DETALLE (compacto)
+            # ─────────────────────────────
+            
+            # Top 10 posts por interacción
+            top_posts = df.sort_values("Interacción", ascending=False).head(10).copy()
+            top_posts["Link"] = top_posts["URL"].apply(lambda u: f'<a href="{u}" target="_blank">Abrir</a>' if u else "")
+            
+            st.markdown("### 🔥 Top 10 posts por interacción (Likes + Retweets)")
+            st.markdown(
+                top_posts[["Autor", "Fecha", "Likes", "Retweets", "Interacción", "Texto", "Link"]]
+                .to_html(escape=False, index=False),
+                unsafe_allow_html=True
+            )
+            st.caption("Nota: la ubicación NO es exacta; es una inferencia basada en 'location' del perfil y/o bio. Úsala solo como aproximación.")
+            
+            # Tabla completa en expander (optimiza espacio)
+            with st.expander("📄 Ver tabla completa de resultados (detalle)"):
+                df_full = df.copy()
+                df_full["Link"] = df_full["URL"].apply(lambda u: f'<a href="{u}" target="_blank">Abrir</a>' if u else "")
+                st.markdown(
+                    df_full[["Autor", "Fecha", "Likes", "Retweets", "Sentimiento", "Ubicación inferida", "Confianza", "Texto", "Link"]]
+                    .to_html(escape=False, index=False),
+                    unsafe_allow_html=True
+                )
             
             # ─────────────────────────────
             # 🧾 PANEL EJECUTIVO (KPI + Alertas)
@@ -701,30 +706,7 @@ if st.button("Buscar en X"):
                 )
                 st.plotly_chart(fig_terms, use_container_width=True)
             
-            # ─────────────────────────────
-            # 🔥 TOP POSTS + DETALLE (compacto)
-            # ─────────────────────────────
-            
-            # Top 10 posts por interacción
-            top_posts = df.sort_values("Interacción", ascending=False).head(10).copy()
-            top_posts["Link"] = top_posts["URL"].apply(lambda u: f'<a href="{u}" target="_blank">Abrir</a>' if u else "")
-            
-            st.markdown("### 🔥 Top 10 posts por interacción (Likes + Retweets)")
-            st.markdown(
-                top_posts[["Autor", "Fecha", "Likes", "Retweets", "Interacción", "Texto", "Link"]]
-                .to_html(escape=False, index=False),
-                unsafe_allow_html=True
-            )
-            
-            # Tabla completa en expander (optimiza espacio)
-            with st.expander("📄 Ver tabla completa de resultados (detalle)"):
-                df_full = df.copy()
-                df_full["Link"] = df_full["URL"].apply(lambda u: f'<a href="{u}" target="_blank">Abrir</a>' if u else "")
-                st.markdown(
-                    df_full[["Autor", "Fecha", "Likes", "Retweets", "Sentimiento", "Ubicación inferida", "Confianza", "Texto", "Link"]]
-                    .to_html(escape=False, index=False),
-                    unsafe_allow_html=True
-                )
+         
 
 
 
