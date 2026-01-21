@@ -211,12 +211,10 @@ def _try_parse_json(text: str):
 def resumen_ejecutivo_gemini(payload: dict, debug: bool = False):
     """
     Retorna: (texto_resumen, status_str)
-
-    texto_resumen: str con 3 párrafos/títulos:
-      Narrativa: ...
-      Riesgos: ...
-      Oportunidades: ...
-    o None si falla.
+    texto_resumen: Markdown con 3 secciones:
+      **Narrativa:** ...
+      **Riesgos:** ...
+      **Oportunidades:** ...
     """
     api_key = st.secrets.get("GEMINI_API_KEY", "")
     if not api_key:
@@ -226,122 +224,100 @@ def resumen_ejecutivo_gemini(payload: dict, debug: bool = False):
     url = f"https://generativelanguage.googleapis.com/v1beta/models/{model}:generateContent?key={api_key}"
     headers = {"Content-Type": "application/json"}
 
-    # ✅ Schema NUEVO: obliga a devolver 3 campos de texto (no bullets)
-    schema = {
-        "type": "object",
-        "properties": {
-            "narrativa": {"type": "string"},
-            "riesgos": {"type": "string"},
-            "oportunidades": {"type": "string"}
-        },
-        "required": ["narrativa", "riesgos", "oportunidades"],
-        "additionalProperties": False
-    }
-
-    # ✅ Aquí entran los INSUMOS: se inyectan como JSON dentro del prompt
     insumos_json = json.dumps(payload, ensure_ascii=False)
 
-    # ✅ Prompt NUEVO (profesional, explícito, 3 secciones)
     prompt = f"""
-Actúa como un analista senior especializado en interpretación de conversaciones públicas en X (antes Twitter),
-con experiencia en análisis de clima social, opinión pública y lectura estratégica de redes para toma de decisiones.
+Actúa como un analista senior de clima social y especialista en interpretación de conversaciones públicas en X (Twitter).
+Tu objetivo es ayudar a un tomador de decisiones con un resumen claro, profesional y NO propagandístico.
 
 CONTEXTO:
-La información que recibirás proviene de publicaciones públicas en X sobre una temática (query) en un rango temporal (time_range).
-Estos datos muestran señales tempranas del debate digital; NO representan a toda la población.
+Los INSUMOS provienen de publicaciones públicas en X sobre una temática (query) durante un rango temporal (time_range).
+Incluyen volumen, distribución de sentimiento estimada, términos dominantes y ejemplos de posts con más interacción.
 
-INSUMOS (JSON) QUE RECIBES (en este orden):
-1) query: temática o palabra clave analizada en X.
-2) time_range: periodo temporal analizado (24h, 48h, 72h, 7 días, 30 días).
-3) volumen: número de publicaciones analizadas.
-4) sentimiento_pct: porcentaje positivo/neutral/negativo (estimación automatizada).
-5) temperatura: lectura sintética del clima (favorable/mixto/riesgo).
-6) top_terminos: términos dominantes más frecuentes.
-7) ejemplos_top_interaccion: extractos de posts con mayor interacción.
-8) nota_ubicacion: advertencia sobre ubicación inferida (no geolocalización exacta).
-
-TAREA:
-Usa EXCLUSIVAMENTE los insumos para elaborar un resumen ejecutivo claro, institucional y accionable.
-No inventes datos. Si falta evidencia para afirmar algo, dilo explícitamente.
-
-SALIDA (OBLIGATORIA):
-Devuelve SOLO un JSON válido (sin markdown, sin texto extra) con esta estructura EXACTA:
-
-{{
-  "narrativa": "Párrafo breve que explique la narrativa predominante.",
-  "riesgos": "Párrafo breve con riesgos detectados (o indicar que son bajos/moderados si aplica).",
-  "oportunidades": "Párrafo breve con oportunidades accionables."
-}}
-
-REGLAS DE REDACCIÓN:
-- Cada párrafo debe ser conciso (máx. 5–6 líneas).
-- Lenguaje claro, profesional y no propagandístico.
-- No repitas cifras literalmente.
-- No uses listas ni viñetas.
+IMPORTANTE:
+- No inventes datos.
+- Si la muestra es chica o la evidencia es insuficiente, dilo explícitamente.
+- No repitas números literalmente si no aporta.
+- No uses viñetas.
 
 INSUMOS (JSON):
 {insumos_json}
+
+SALIDA OBLIGATORIA:
+Escribe EXACTAMENTE 3 párrafos, cada uno iniciando con estas etiquetas (tal cual):
+
+Narrativa: <explica en un párrafo la narrativa predominante usando top_terminos y ejemplos>
+Riesgos: <explica en un párrafo los riesgos detectados (reputacional, amplificación, confusión, etc.)>
+Oportunidades: <explica en un párrafo oportunidades accionables (aclaración, vocería, contenido informativo, monitoreo)>
+
+Nada más. No agregues saludos ni conclusiones.
 """.strip()
+
+    if debug:
+        st.text_area("DEBUG: Prompt enviado a Gemini", value=prompt, height=320)
+        st.text_area("DEBUG: Insumos (JSON) enviados", value=insumos_json, height=220)
 
     body = {
         "contents": [{"parts": [{"text": prompt}]}],
         "generationConfig": {
-            "responseMimeType": "application/json",
-            "responseJsonSchema": schema,
             "temperature": 0.2,
-            # ✅ como ahora son 3 párrafos, no necesitas 700
-            "maxOutputTokens": 450
+            "maxOutputTokens": 350  # 3 párrafos, corto (y reduces MAX_TOKENS)
         }
     }
 
     try:
         r = requests.post(url, headers=headers, json=body, timeout=35)
+
+        if debug:
+            st.text_area("DEBUG: RAW RESPONSE (texto crudo)", value=r.text, height=320)
+
         if r.status_code != 200:
             return None, f"Gemini ERROR {r.status_code}: {r.text[:200]}"
 
         data = r.json()
 
-        finish = ""
-        raw_text = ""
-        try:
-            cand0 = data.get("candidates", [])[0]
-            finish = cand0.get("finishReason", "")
-            raw_text = cand0.get("content", {}).get("parts", [{}])[0].get("text", "")
-        except Exception:
-            pass
+        # ✅ OJO: Gemini puede devolver varias parts -> concatenamos todas
+        parts = data.get("candidates", [{}])[0].get("content", {}).get("parts", [])
+        text = "\n".join([p.get("text", "") for p in parts if p.get("text")]).strip()
+
+        finish = data.get("candidates", [{}])[0].get("finishReason", "")
 
         if debug:
-            st.text_area("DEBUG: Gemini raw text (JSON)", value=raw_text or "", height=180)
             st.caption(f"DEBUG: finishReason = {finish or 'N/A'}")
+            st.text_area("DEBUG: Texto extraído (concatenado)", value=text, height=220)
 
-        if not raw_text:
+        if not text:
             return None, "Gemini: respuesta vacía"
 
-        obj = json.loads(raw_text)
+        # Parseo estilo Apps Script: buscamos las 3 secciones
+        m = re.search(
+            r"(?is)^\s*Narrativa:\s*(.+?)\s*^\s*Riesgos:\s*(.+?)\s*^\s*Oportunidades:\s*(.+?)\s*$",
+            text,
+            re.MULTILINE
+        )
 
-        narrativa = (obj.get("narrativa") or "").strip()
-        riesgos = (obj.get("riesgos") or "").strip()
-        oportunidades = (obj.get("oportunidades") or "").strip()
+        if not m:
+            # Si no calza perfecto, igual devolvemos el texto para no perderlo
+            return text, "Gemini OK (sin parseo exacto; mostrando texto tal cual)"
 
-        if not narrativa or not riesgos or not oportunidades:
-            return None, "Gemini: JSON incompleto (faltan campos o vienen vacíos)"
+        narrativa = m.group(1).strip()
+        riesgos = m.group(2).strip()
+        oportunidades = m.group(3).strip()
 
-        # ✅ Devolvemos un solo texto listo para mostrar
-        texto = (
+        salida = (
             f"**Narrativa:** {narrativa}\n\n"
             f"**Riesgos:** {riesgos}\n\n"
             f"**Oportunidades:** {oportunidades}"
         )
 
-        # Si llega truncado igual, te avisará aquí
+        # Si llega truncado, lo reportamos (pero igual lo mostramos)
         if finish == "MAX_TOKENS":
-            return None, "Gemini: salida truncada (MAX_TOKENS). Reduce texto o baja complejidad."
+            return salida, "Gemini OK (pero truncado por MAX_TOKENS)"
 
-        return texto, "Gemini OK (3 secciones)"
+        return salida, "Gemini OK (3 secciones)"
 
     except Exception as e:
         return None, f"Gemini: excepción ({type(e).__name__})"
-
 
 if "last_search_ts" not in st.session_state:
     st.session_state["last_search_ts"] = 0
@@ -636,7 +612,7 @@ if st.button("Buscar en X"):
 
             if bullets_ia:
                 st.caption("Generado con IA (Gemini). Si falla, se usa el resumen por reglas.")
-                st.markdown(bullets_ia)
+                st.markdown(bullets_ia)      
             else:
                 st.caption("IA no disponible o falló. Mostrando resumen por reglas.")
                                     
