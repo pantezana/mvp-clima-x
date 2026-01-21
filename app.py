@@ -335,7 +335,7 @@ STOPWORDS = set([
             
 def limpiar_texto(texto):
     palabras = re.findall(r"\b[a-záéíóúñ]+\b", (texto or "").lower())
-    return [p for p in palabras if p not in stopwords and len(p) > 3]
+    return [p for p in palabras if p not in STOPWORDS and len(p) > 3]
 
 # --- Sentimiento simple (léxico)
 POSITIVAS = set([
@@ -383,8 +383,8 @@ NEGATIVAS = set([
             
 def calcular_sentimiento(texto):
     palabras = limpiar_texto(texto)
-    pos = sum(1 for p in palabras if p in positivas)
-    neg = sum(1 for p in palabras if p in negativas)
+    pos = sum(1 for p in palabras if p in POSITIVAS)
+    neg = sum(1 for p in palabras if p in NEGATIVAS)
     if pos > neg:
         return "Positivo"
     if neg > pos:
@@ -528,7 +528,7 @@ if st.button("Buscar en X"):
         if len(top_post) > 0:
             top_autor = str(top_post.iloc[0].get("Autor", "N/A"))            
         else:
-            top_autor, top_int = "N/A", 0
+            top_autor = "N/A"
             
         # Temperatura (semáforo simple)
         if pct_neg >= 40:
