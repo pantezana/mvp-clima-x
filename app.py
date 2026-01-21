@@ -757,15 +757,15 @@ if st.button("Buscar en X"):
         
                 df_rt_agregado["original_id"] = df_rt_agregado["original_id"].astype(str)
                 df_rt_agregado = df_rt_agregado.merge(df_rt_sent, on="original_id", how="left")
+           
+        # ---------------------------------------------------------
+        # 4.4) Agregar QUOTES como amplificación (quotes también son conversación)
+        # ---------------------------------------------------------
+        # ✅ IMPORTANTE: aunque quede vacío, debe tener columna "original_id" para no romper merges
+        df_quotes_agregado = pd.DataFrame(columns=[
+            "original_id", "Quotes_en_rango", "Likes_total_quotes", "Retweets_total_quotes", "Fecha_ultima_quote"
+        ])
         
-        # ---------------------------------------------------------
-        # 4.4) Agregar QUOTES como amplificación (pero OJO: quotes también son conversación)
-        #     Para amplificación necesitamos sumar:
-        #       Amplificación_total = RT_puros + Quotes
-        #     y guardar:
-        #       Quotes_en_rango, Likes_total_quotes, etc.
-        # ---------------------------------------------------------
-        df_quotes_agregado = pd.DataFrame()
         if not df_quotes.empty:
             qtmp = df_quotes.copy()
             qtmp = qtmp[qtmp["original_id"].notna()].copy()
@@ -782,7 +782,7 @@ if st.button("Buscar en X"):
                         .reset_index()
                 )
                 df_quotes_agregado["original_id"] = df_quotes_agregado["original_id"].astype(str)
-        
+
         # ---------------------------------------------------------
         # 4.5) Construir df_amplificacion (una sola tabla, 1 fila por tweet original)
         #     Incluye:
