@@ -733,41 +733,41 @@ if st.button("Buscar en X"):
             # ─────────────────────────────
             # 📊 TABLERO VISUAL (Plotly)
             # ─────────────────────────────
-            st.markdown("## 📊 Tablero visual")
+        st.markdown("## 📊 Tablero visual")
             
-            if df["Fecha"].isna().all():
-                st.warning("No se pudo interpretar fechas para graficar tendencia.")
-            else:
-                df["Día"] = df["Fecha"].dt.date.astype(str)
+        if df["Fecha"].isna().all():
+            st.warning("No se pudo interpretar fechas para graficar tendencia.")
+        else:
+            df["Día"] = df["Fecha"].dt.date.astype(str)
             
-                # 1) Volumen por día
-                vol_por_dia = df.groupby("Día").size().reset_index(name="Volumen")
-                fig_vol = px.line(vol_por_dia, x="Día", y="Volumen", markers=True, title="📈 Volumen de publicaciones por día")
-                st.plotly_chart(fig_vol, use_container_width=True)
+            # 1) Volumen por día
+            vol_por_dia = df.groupby("Día").size().reset_index(name="Volumen")
+            fig_vol = px.line(vol_por_dia, x="Día", y="Volumen", markers=True, title="📈 Volumen de publicaciones por día")
+            st.plotly_chart(fig_vol, use_container_width=True)
             
-                # 2) Sentimiento (donut)
-                sent_counts = df["Sentimiento"].value_counts().reset_index()
-                sent_counts.columns = ["Sentimiento", "Cantidad"]
-                fig_sent = px.pie(sent_counts, names="Sentimiento", values="Cantidad", hole=0.45, title="🧁 Distribución de sentimiento")
-                st.plotly_chart(fig_sent, use_container_width=True)
-                st.caption(f"Método de sentimiento: {metodo_sent}. Score HF (0–1) es confianza aproximada cuando hay IA.")
+            # 2) Sentimiento (donut)
+            sent_counts = df["Sentimiento"].value_counts().reset_index()
+            sent_counts.columns = ["Sentimiento", "Cantidad"]
+            fig_sent = px.pie(sent_counts, names="Sentimiento", values="Cantidad", hole=0.45, title="🧁 Distribución de sentimiento")
+            st.plotly_chart(fig_sent, use_container_width=True)
+            st.caption(f"Método de sentimiento: {metodo_sent}. Score HF (0–1) es confianza aproximada cuando hay IA.")
             
-                # 3) Sentimiento por día (apilado)
-                sent_por_dia = df.groupby(["Día", "Sentimiento"]).size().reset_index(name="Cantidad")
-                fig_sent_dia = px.bar(
-                    sent_por_dia, x="Día", y="Cantidad", color="Sentimiento",
-                    barmode="stack", title="📆 Sentimiento por día (barras apiladas)"
-                )
-                st.plotly_chart(fig_sent_dia, use_container_width=True)
+            # 3) Sentimiento por día (apilado)
+            sent_por_dia = df.groupby(["Día", "Sentimiento"]).size().reset_index(name="Cantidad")
+            fig_sent_dia = px.bar(
+                sent_por_dia, x="Día", y="Cantidad", color="Sentimiento",
+                barmode="stack", title="📆 Sentimiento por día (barras apiladas)"
+            )
+            st.plotly_chart(fig_sent_dia, use_container_width=True)
             
-                # 4) Top términos
-                top_terminos_df = top_terminos.reset_index()
-                top_terminos_df.columns = ["Término", "Frecuencia"]
-                fig_terms = px.bar(
-                    top_terminos_df, x="Frecuencia", y="Término", orientation="h",
-                    title="🏷️ Top términos dominantes (limpio de stopwords)"
-                )
-                st.plotly_chart(fig_terms, use_container_width=True)
+            # 4) Top términos
+            top_terminos_df = top_terminos.reset_index()
+            top_terminos_df.columns = ["Término", "Frecuencia"]
+            fig_terms = px.bar(
+                top_terminos_df, x="Frecuencia", y="Término", orientation="h",
+                title="🏷️ Top términos dominantes (limpio de stopwords)"
+            )
+            st.plotly_chart(fig_terms, use_container_width=True)
             
          
 
