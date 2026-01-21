@@ -1321,4 +1321,338 @@ if st.button("Buscar en X"):
             "El botón 'Abrir' siempre abre el tweet ORIGINAL."
         )
 
+        # =========================
+        # PARTE 7 — KPI + Alertas + Resumen Gemini + Gráficos (con nueva lógica de sentimientos)
+        # =========================
+        # ✅ Requisitos previos:
+        # - df_originales_rank (de PARTE 6) o df_originales
+        # - df_conversacion (originales + quotes con sentimiento por fila)
+        # - df_amplificacion (agregada por tweet original)
+        # - top_terminos_conversacion, top_terminos_amplificacion (si no existen, los calculamos aquí)
+        
+        st.markdown("## 🧾 Panel ejecutivo (métricas separadas)")
+        
+        # -----------------------------
+        # 1) KPIs base por subconjunto
+        # -----------------------------
+        n_originales = int(len(df_originales)) if df_originales is not None else 0
+        n_quotes = int(len(df_quotes)) if df_quotes is not None else 0
+        n_rt_puros = int(len(df_rt_puros)) if df_rt_puros is not None else 0
+        
+        # Conversación: Originales + Quotes (sin RT puros)
+        n_conversacion = int(len(df_conversacion)) if df_conversacion is not None else 0
+        
+        # Amplificación: agregada por original (cada fila = 1 tweet original amplificado)
+        n_originales_amplificados = int(len(df_amplificacion)) if df_amplificacion is not None else 0
+        
+        # Totales de amplificación
+        total_rt_puros = int(df_amplificacion["RT_puros_count"].sum()) if (df_amplificacion is not None and not df_amplificacion.empty) else 0
+        total_quotes = int(df_amplificacion["Quotes_count"].sum()) if (df_amplificacion is not None and not df_amplificacion.empty) else 0
+        total_ampl = int(df_amplificacion["Ampl_total"].sum()) if (df_amplificacion is not None and not df_amplificacion.empty) else 0
+        
+        likes_total_amp = int(df_amplificacion["Likes_total_amplificación"].sum()) if (df_amplificacion is not None and not df_amplificacion.empty) else 0
+        
+        # Interacción conversación (likes+RT de originales+quotes)
+        interaccion_conversacion = int(df_conversacion["Interacción"].sum()) if (df_conversacion is not None and not df_conversacion.empty and "Interacción" in df_conversacion.columns) else 0
+        
+        # -----------------------------
+        # 2) Sentimiento conversación (sin duplicar por RT puros)
+        # -----------------------------
+        def pct_sent(df_x: pd.DataFrame):
+            if df_x is None or df_x.empty or "Sentimiento" not in df_x.columns:
+                return 0.0, 0.0, 0.0
+            total = len(df_x)
+            pct_pos = round((df_x["Sentimiento"] == "Positivo").mean() * 100, 1) if total else 0
+            pct_neu = round((df_x["Sentimiento"] == "Neutral").mean() * 100, 1) if total else 0
+            pct_neg = round((df_x["Sentimiento"] == "Negativo").mean() * 100, 1) if total else 0
+            return pct_pos, pct_neu, pct_neg
+        
+        pct_pos_conv, pct_neu_conv, pct_neg_conv = pct_sent(df_conversacion)
+        
+        # -----------------------------
+        # 3) Sentimiento amplificación (ponderado por RT puros + quotes)
+        #    (ya viene calculado en df_amplificacion como Sentimiento_dominante,
+        #     pero aquí construimos una "distribución ponderada" para KPI)
+        # -----------------------------
+        def distribucion_amp_ponderada(df_amp: pd.DataFrame):
+            if df_amp is None or df_amp.empty:
+                return 0.0, 0.0, 0.0
+        
+            # Peso = RT_puros_count + Quotes_count (confirmado por ti)
+            df_tmp = df_amp.copy()
+            df_tmp["peso"] = pd.to_numeric(df_tmp["RT_puros_count"], errors="coerce").fillna(0) + \
+                             pd.to_numeric(df_tmp["Quotes_count"], errors="coerce").fillna(0)
+        
+            total_peso = float(df_tmp["peso"].sum())
+            if total_peso <= 0:
+                return 0.0, 0.0, 0.0
+        
+            pos = float(df_tmp.loc[df_tmp["Sentimiento_dominante"] == "Positivo", "peso"].sum())
+            neu = float(df_tmp.loc[df_tmp["Sentimiento_dominante"] == "Neutral", "peso"].sum())
+            neg = float(df_tmp.loc[df_tmp["Sentimiento_dominante"] == "Negativo", "peso"].sum())
+        
+            return round(pos/total_peso*100, 1), round(neu/total_peso*100, 1), round(neg/total_peso*100, 1)
+        
+        pct_pos_amp, pct_neu_amp, pct_neg_amp = distribucion_amp_ponderada(df_amplificacion)
+        
+        # -----------------------------
+        # 4) Temperatura (dos semáforos)
+        # -----------------------------
+        def calc_temperatura(pct_neg: float, pct_pos: float):
+            if pct_neg >= 40:
+                return "🔴 Riesgo reputacional"
+            if pct_pos >= 60 and pct_neg < 25:
+                return "🟢 Clima favorable"
+            return "🟡 Mixto / neutro"
+        
+        temp_conv = calc_temperatura(pct_neg_conv, pct_pos_conv)
+        temp_amp = calc_temperatura(pct_neg_amp, pct_pos_amp)
+        
+        # -----------------------------
+        # 5) Narrativas (top términos)
+        #    - Conversación: df_conversacion.Texto
+        #    - Amplificación: top textos originales amplificados (Texto_original)
+        # -----------------------------
+        def top_terminos_de_textos(lista_textos: list[str], top_n: int = 15):
+            all_words = []
+            for t in (lista_textos or []):
+                all_words.extend(limpiar_texto(t))
+            s = pd.Series(all_words).value_counts().head(top_n)
+            return s, s.index.tolist()
+        
+        # Conversación
+        if df_conversacion is not None and not df_conversacion.empty:
+            top_terms_conv, top_terms_conv_list = top_terminos_de_textos(df_conversacion["Texto"].tolist(), top_n=15)
+        else:
+            top_terms_conv, top_terms_conv_list = pd.Series(dtype=int), []
+        
+        # Amplificación (usa textos originales, NO textos repetidos)
+        if df_amplificacion is not None and not df_amplificacion.empty and "Texto_original" in df_amplificacion.columns:
+            # priorizamos los más amplificados (top 50) para que el análisis represente lo “grande”
+            df_amp_top = df_amplificacion.sort_values("Ampl_total", ascending=False).head(50)
+            top_terms_amp, top_terms_amp_list = top_terminos_de_textos(df_amp_top["Texto_original"].tolist(), top_n=15)
+        else:
+            top_terms_amp, top_terms_amp_list = pd.Series(dtype=int), []
+        
+        narrativa_conv_1 = top_terms_conv_list[0] if len(top_terms_conv_list) else "N/A"
+        narrativa_amp_1 = top_terms_amp_list[0] if len(top_terms_amp_list) else "N/A"
+        
+        # Top autor (en conversación por interacción)
+        if df_conversacion is not None and not df_conversacion.empty:
+            top_row = df_conversacion.sort_values("Interacción", ascending=False).head(1)
+            top_autor = str(top_row.iloc[0].get("Autor", "N/A")) if len(top_row) else "N/A"
+        else:
+            top_autor = "N/A"
+        
+        # -----------------------------
+        # 6) Mostrar KPIs (separados)
+        # -----------------------------
+        k1, k2, k3, k4, k5, k6 = st.columns(6)
+        k1.metric("Conversación (posts)", f"{n_conversacion}")
+        k2.metric("Temp. conversación", temp_conv)
+        k3.metric("% Neg (conv)", f"{pct_neg_conv}%")
+        k4.metric("Amplificación total", f"{total_ampl}")
+        k5.metric("Temp. amplificación", temp_amp)
+        k6.metric("% Neg (amp)", f"{pct_neg_amp}%")
+        
+        k7, k8, k9, k10, k11, k12 = st.columns(6)
+        k7.metric("Originales", f"{n_originales}")
+        k8.metric("Quotes", f"{n_quotes}")
+        k9.metric("RT puros", f"{n_rt_puros}")
+        k10.metric("Interacción (conv)", f"{interaccion_conversacion}")
+        k11.metric("Likes (ampl)", f"{likes_total_amp}")
+        k12.metric("Narrativa #1 (conv)", narrativa_conv_1)
+        
+        st.caption(
+            f"Conv: Pos {pct_pos_conv}% | Neu {pct_neu_conv}% | Neg {pct_neg_conv}% — "
+            f"Amp (ponderado): Pos {pct_pos_amp}% | Neu {pct_neu_amp}% | Neg {pct_neg_amp}%."
+        )
+        
+        # -----------------------------
+        # 7) Alertas (ajustadas a nueva lógica)
+        # -----------------------------
+        st.markdown("### 🚨 Alertas")
+        alertas = []
+        
+        # Riesgo por conversación
+        if pct_neg_conv >= 40 and n_conversacion >= 10:
+            alertas.append("⚠️ Conversación con tono negativo alto. Priorizar mensajes de contención y datos verificables.")
+        
+        # Riesgo por amplificación (algo negativo se está difundiendo)
+        if pct_neg_amp >= 40 and total_ampl >= 20:
+            alertas.append("📣 Se está amplificando contenido predominantemente negativo (RT/quotes). Vigilar escalamiento y fuentes.")
+        
+        # Amplificación alta (viralización)
+        if total_ampl >= 200:
+            alertas.append("🔥 Amplificación alta. Probable viralización: monitorear evolución por hora/día y cuentas amplificadoras.")
+        
+        # Poco volumen
+        if n_conversacion < 5 and total_ampl < 10:
+            alertas.append("ℹ️ Muestra pequeña. Interpretar resultados como señal preliminar (no concluyente).")
+        
+        if alertas:
+            for a in alertas:
+                st.warning(a)
+        else:
+            st.info("Sin alertas fuertes con los umbrales actuales.")
+        
+        # -----------------------------
+        # 8) Resumen Ejecutivo (Gemini) — con insumos de conversación + amplificación
+        # -----------------------------
+        st.markdown("## ⭐ Resumen ejecutivo")
+        
+        # Ejemplos de conversación (top interacción)
+        ejemplos_conv = []
+        if df_conversacion is not None and not df_conversacion.empty:
+            ejemplos_conv = (
+                df_conversacion.sort_values("Interacción", ascending=False)
+                .head(6)["Texto"]
+                .apply(lambda t: (t[:240] + "…") if isinstance(t, str) and len(t) > 240 else t)
+                .tolist()
+            )
+        
+        # Ejemplos de amplificación (top amplificados, texto original)
+        ejemplos_amp = []
+        if df_amplificacion is not None and not df_amplificacion.empty:
+            ejemplos_amp = (
+                df_amplificacion.sort_values("Ampl_total", ascending=False)
+                .head(4)["Texto_original"]
+                .apply(lambda t: (t[:240] + "…") if isinstance(t, str) and len(t) > 240 else t)
+                .tolist()
+            )
+        
+        payload = {
+            "query": query,
+            "time_range": time_range,
+            "kpis": {
+                "conversacion_posts": n_conversacion,
+                "originales": n_originales,
+                "quotes": n_quotes,
+                "rt_puros": n_rt_puros,
+                "ampl_total": total_ampl,
+                "rt_puros_total": total_rt_puros,
+                "quotes_total": total_quotes,
+            },
+            "sentimiento_conversacion_pct": {"positivo": pct_pos_conv, "neutral": pct_neu_conv, "negativo": pct_neg_conv},
+            "sentimiento_amplificacion_pct_ponderado": {"positivo": pct_pos_amp, "neutral": pct_neu_amp, "negativo": pct_neg_amp},
+            "temperatura_conversacion": temp_conv,
+            "temperatura_amplificacion": temp_amp,
+            "top_terminos_conversacion": top_terms_conv_list[:10],
+            "top_terminos_amplificacion": top_terms_amp_list[:10],
+            "ejemplos_top_interaccion_conversacion": ejemplos_conv,
+            "ejemplos_top_amplificados": ejemplos_amp,
+            "nota": "Quotes cuentan como conversación y como amplificación. RT puros solo amplificación. Sentimiento en conversación no se duplica por RT puros.",
+            "nota_ubicacion": "Ubicación inferida desde perfil/bio; no es geolocalización exacta."
+        }
+        
+        bullets_ia, gemini_status = resumen_ejecutivo_gemini(payload, debug=debug_gemini)
+        
+        if bullets_ia:
+            st.caption(f"Generado con IA (Gemini). Estado: {gemini_status}")
+            st.markdown(bullets_ia)
+        else:
+            st.caption(f"IA no disponible o falló. Estado: {gemini_status}. Mostrando resumen por reglas.")
+        
+            # Resumen por reglas (sin viñetas largas)
+            narrativa = ", ".join(top_terms_conv_list[:6]) if top_terms_conv_list else "sin términos dominantes claros"
+            narrativa_amp = ", ".join(top_terms_amp_list[:6]) if top_terms_amp_list else "sin términos dominantes claros"
+        
+            st.markdown(
+                f"**Narrativa:** La conversación reciente se concentra en {narrativa}. "
+                f"En paralelo, la amplificación se concentra en {narrativa_amp}.\n\n"
+                f"**Riesgos:** Cuando el componente negativo es alto en conversación o amplificación, "
+                f"puede escalar rápido por retweets/quotes; conviene monitorear términos nuevos y cuentas amplificadoras.\n\n"
+                f"**Oportunidades:** Responder con información verificable, aclaraciones breves y consistentes, "
+                f"y mantener monitoreo de cambios de narrativa por día."
+            )
+        
+        st.caption(
+            "Advertencia metodológica: señal temprana basada en publicaciones públicas de X; "
+            "sentimiento automatizado (IA/fallback) y ubicación inferida desde perfil/bio. "
+            "No representa a toda la población."
+        )
+        
+        # -----------------------------
+        # 9) Tablero visual (actualizado)
+        # -----------------------------
+        st.markdown("## 📊 Tablero visual")
+        
+        # --- 9.1 Volumen por día (conversación vs RT puros)
+        def add_dia(df_x: pd.DataFrame, col_fecha="Fecha"):
+            if df_x is None or df_x.empty:
+                return df_x
+            df_x = df_x.copy()
+            df_x[col_fecha] = pd.to_datetime(df_x[col_fecha], errors="coerce")
+            df_x["Día"] = df_x[col_fecha].dt.date.astype(str)
+            return df_x
+        
+        df_conv_d = add_dia(df_conversacion)
+        df_rt_d = add_dia(df_rt_puros)
+        
+        if df_conv_d is None or df_conv_d.empty:
+            st.info("No hay datos suficientes de conversación para graficar.")
+        else:
+            vol_conv = df_conv_d.groupby("Día").size().reset_index(name="Conversación")
+            if df_rt_d is not None and not df_rt_d.empty:
+                vol_rt = df_rt_d.groupby("Día").size().reset_index(name="RT_puros")
+                vol = pd.merge(vol_conv, vol_rt, on="Día", how="left").fillna(0)
+            else:
+                vol = vol_conv.copy()
+                vol["RT_puros"] = 0
+        
+            fig_vol = px.line(vol, x="Día", y=["Conversación", "RT_puros"], markers=True, title="📈 Volumen por día (Conversación vs RT puros)")
+            st.plotly_chart(fig_vol, use_container_width=True)
+        
+        # --- 9.2 Distribución de sentimiento (dos donuts: conversación vs amplificación ponderada)
+        colA, colB = st.columns(2)
+        
+        with colA:
+            if df_conversacion is not None and not df_conversacion.empty and "Sentimiento" in df_conversacion.columns:
+                sent_counts = df_conversacion["Sentimiento"].value_counts().reset_index()
+                sent_counts.columns = ["Sentimiento", "Cantidad"]
+                fig_sent_conv = px.pie(sent_counts, names="Sentimiento", values="Cantidad", hole=0.45, title="🧁 Sentimiento — Conversación")
+                st.plotly_chart(fig_sent_conv, use_container_width=True)
+            else:
+                st.info("Sin datos de sentimiento en conversación.")
+        
+        with colB:
+            if df_amplificacion is not None and not df_amplificacion.empty:
+                # armamos una tabla con pesos para el donut
+                tmp = df_amplificacion.copy()
+                tmp["peso"] = pd.to_numeric(tmp["RT_puros_count"], errors="coerce").fillna(0) + pd.to_numeric(tmp["Quotes_count"], errors="coerce").fillna(0)
+                sent_w = tmp.groupby("Sentimiento_dominante")["peso"].sum().reset_index()
+                sent_w.columns = ["Sentimiento", "Peso"]
+                fig_sent_amp = px.pie(sent_w, names="Sentimiento", values="Peso", hole=0.45, title="🧁 Sentimiento — Amplificación (ponderado)")
+                st.plotly_chart(fig_sent_amp, use_container_width=True)
+            else:
+                st.info("Sin datos de amplificación.")
+        
+        # --- 9.3 Sentimiento por día (solo conversación, porque RT puros no deben duplicar)
+        if df_conv_d is not None and not df_conv_d.empty and "Sentimiento" in df_conv_d.columns:
+            sent_por_dia = df_conv_d.groupby(["Día", "Sentimiento"]).size().reset_index(name="Cantidad")
+            fig_sent_dia = px.bar(sent_por_dia, x="Día", y="Cantidad", color="Sentimiento", barmode="stack", title="📆 Sentimiento por día (solo conversación)")
+            st.plotly_chart(fig_sent_dia, use_container_width=True)
+        else:
+            st.info("No hay datos suficientes para 'Sentimiento por día'.")
+        
+        # --- 9.4 Top términos (dos barras: conversación vs amplificación)
+        cT1, cT2 = st.columns(2)
+        with cT1:
+            if top_terms_conv is not None and len(top_terms_conv) > 0:
+                df_terms = top_terms_conv.reset_index()
+                df_terms.columns = ["Término", "Frecuencia"]
+                fig_terms = px.bar(df_terms, x="Frecuencia", y="Término", orientation="h", title="🏷️ Top términos — Conversación")
+                st.plotly_chart(fig_terms, use_container_width=True)
+            else:
+                st.info("Sin términos dominantes en conversación.")
+        
+        with cT2:
+            if top_terms_amp is not None and len(top_terms_amp) > 0:
+                df_terms2 = top_terms_amp.reset_index()
+                df_terms2.columns = ["Término", "Frecuencia"]
+                fig_terms2 = px.bar(df_terms2, x="Frecuencia", y="Término", orientation="h", title="🏷️ Top términos — Amplificación (originales amplificados)")
+                st.plotly_chart(fig_terms2, use_container_width=True)
+            else:
+                st.info("Sin términos dominantes en amplificación.")
+
 
