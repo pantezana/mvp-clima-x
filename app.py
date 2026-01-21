@@ -10,7 +10,7 @@ import ast
 from datetime import datetime, timedelta
 
 st.set_page_config(page_title="MVP Clima en X", layout="wide")
-st.title("📊 MVP – Clima del Tema en X")
+st.title("🖥️ MVP – Clima del Tema en X")
 
 bearer_token = st.secrets["X_BEARER_TOKEN"]
 client = tweepy.Client(bearer_token=bearer_token)
@@ -578,7 +578,7 @@ if st.button("Buscar en X"):
                 )
             
             # ─────────────────────────────
-            # 🧾 PANEL EJECUTIVO (KPI + Alertas)
+            # 🧮 PANEL EJECUTIVO (KPI + Alertas)
             # ─────────────────────────────
             st.markdown("## 🧾 Panel ejecutivo")
             
@@ -609,7 +609,7 @@ if st.button("Buscar en X"):
             # ─────────────────────────────
             # 🧠 RESUMEN EJECUTIVO (sin repetir números)
             # ─────────────────────────────
-            st.markdown("## 🧠 Resumen ejecutivo (accionable)")
+            st.markdown("## ⭐ Resumen ejecutivo")
 
             if bullets_ia:
                 st.caption("Generado con IA (Gemini). Si falla, se usa el resumen por reglas.")
@@ -680,20 +680,20 @@ if st.button("Buscar en X"):
             
                 # 1) Volumen por día
                 vol_por_dia = df.groupby("Día").size().reset_index(name="Volumen")
-                fig_vol = px.line(vol_por_dia, x="Día", y="Volumen", markers=True, title="Volumen de publicaciones por día")
+                fig_vol = px.line(vol_por_dia, x="Día", y="Volumen", markers=True, title="📈 Volumen de publicaciones por día")
                 st.plotly_chart(fig_vol, use_container_width=True)
             
                 # 2) Sentimiento (donut)
                 sent_counts = df["Sentimiento"].value_counts().reset_index()
                 sent_counts.columns = ["Sentimiento", "Cantidad"]
-                fig_sent = px.pie(sent_counts, names="Sentimiento", values="Cantidad", hole=0.45, title="Distribución de sentimiento")
+                fig_sent = px.pie(sent_counts, names="Sentimiento", values="Cantidad", hole=0.45, title="🧁 Distribución de sentimiento")
                 st.plotly_chart(fig_sent, use_container_width=True)
             
                 # 3) Sentimiento por día (apilado)
                 sent_por_dia = df.groupby(["Día", "Sentimiento"]).size().reset_index(name="Cantidad")
                 fig_sent_dia = px.bar(
                     sent_por_dia, x="Día", y="Cantidad", color="Sentimiento",
-                    barmode="stack", title="Sentimiento por día (barras apiladas)"
+                    barmode="stack", title="📆 Sentimiento por día (barras apiladas)"
                 )
                 st.plotly_chart(fig_sent_dia, use_container_width=True)
             
@@ -702,7 +702,7 @@ if st.button("Buscar en X"):
                 top_terminos_df.columns = ["Término", "Frecuencia"]
                 fig_terms = px.bar(
                     top_terminos_df, x="Frecuencia", y="Término", orientation="h",
-                    title="Top términos dominantes (limpio de stopwords)"
+                    title="🏷️ Top términos dominantes (limpio de stopwords)"
                 )
                 st.plotly_chart(fig_terms, use_container_width=True)
             
