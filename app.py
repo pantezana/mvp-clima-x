@@ -481,8 +481,7 @@ if st.button("Buscar en X"):
 
             # Informar método usado
             metodo_sent = "IA (Hugging Face)" if df["Sentimiento_HF"].notna().any() else "Léxico (fallback)"
-            st.caption(f"Método de sentimiento: {metodo_sent}. Score HF (0–1) es confianza aproximada cuando hay IA.")
-            
+                        
             # ============================================================
             # ✅ BLOQUE UNIFICADO (KPI + Resumen ejecutivo + Gráficos + Tabla)            
             # - df armado con columnas: Texto, Fecha, Likes, Retweets, Autor, URL, Ubicación inferida...
@@ -565,8 +564,7 @@ if st.button("Buscar en X"):
                 .to_html(escape=False, index=False),
                 unsafe_allow_html=True
             )
-            st.caption("Nota: la ubicación NO es exacta; es una inferencia basada en 'location' del perfil y/o bio. Úsala solo como aproximación.")
-            
+                
             # Tabla completa en expander (optimiza espacio)
             with st.expander("📄 Ver tabla completa de resultados (detalle)"):
                 df_full = df.copy()
@@ -576,6 +574,7 @@ if st.button("Buscar en X"):
                     .to_html(escape=False, index=False),
                     unsafe_allow_html=True
                 )
+            st.caption("Nota: la ubicación NO es exacta; es una inferencia basada en 'location' del perfil y/o bio. Úsala solo como aproximación.")
             
             # ─────────────────────────────
             # 🧮 PANEL EJECUTIVO (KPI + Alertas)
@@ -605,7 +604,7 @@ if st.button("Buscar en X"):
                 st.markdown("### 🚨 Alertas")
                 for a in alertas:
                     st.warning(a)
-            
+            st.caption(f"Método de sentimiento: {metodo_sent}. Score HF (0–1) es confianza aproximada cuando hay IA.")
             # ─────────────────────────────
             # 🧠 RESUMEN EJECUTIVO (sin repetir números)
             # ─────────────────────────────
@@ -688,6 +687,7 @@ if st.button("Buscar en X"):
                 sent_counts.columns = ["Sentimiento", "Cantidad"]
                 fig_sent = px.pie(sent_counts, names="Sentimiento", values="Cantidad", hole=0.45, title="🧁 Distribución de sentimiento")
                 st.plotly_chart(fig_sent, use_container_width=True)
+                st.caption(f"Método de sentimiento: {metodo_sent}. Score HF (0–1) es confianza aproximada cuando hay IA.")
             
                 # 3) Sentimiento por día (apilado)
                 sent_por_dia = df.groupby(["Día", "Sentimiento"]).size().reset_index(name="Cantidad")
