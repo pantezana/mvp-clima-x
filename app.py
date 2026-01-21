@@ -422,46 +422,34 @@ if st.button("Buscar en X"):
             data = []
             for t in tweets_data:
                 u = users_by_id.get(t.author_id)
-                ...
-        else:
-            st.warning("No se encontraron publicaciones en el rango seleccionado.")
-            st.stop()
-
-        if response.data:
-            # Mapa author_id -> objeto user
-            users_by_id = {}
-            if response.includes and "users" in response.includes:
-                users_by_id = {u.id: u for u in response.includes["users"]}
-
-            data = []
-            for t in response.data:
-                u = users_by_id.get(t.author_id)
-
+        
                 username = getattr(u, "username", None) if u else None
                 name = getattr(u, "name", None) if u else None
                 profile_location = getattr(u, "location", None) if u else None
                 profile_desc = getattr(u, "description", None) if u else None
-
+        
                 ubicacion, confianza, fuente = infer_peru_location(profile_location, profile_desc)
-
+        
                 # Link público al post (siempre que tengamos username)
                 tweet_url = f"https://x.com/{username}/status/{t.id}" if username else ""
-
+        
                 data.append({
                     "Autor": f"@{username}" if username else (name or "Desconocido"),
                     "URL": tweet_url,
                     "Texto": t.text,
                     "Fecha": t.created_at,
-                    "Likes": t.public_metrics.get("like_count", 0),
-                    "Retweets": t.public_metrics.get("retweet_count", 0),
+                    "Likes": (t.public_metrics or {}).get("like_count", 0),
+                    "Retweets": (t.public_metrics or {}).get("retweet_count", 0),
                     "Ubicación inferida": ubicacion,
                     "Confianza": confianza,
                     "Fuente ubic.": fuente
                 })
-
+        
             df = pd.DataFrame(data)
+        else:
+            st.warning("No se encontraron publicaciones para ese criterio o rango seleccionado")
+            st.stop()
 
-           
 
             st.markdown("## 🧠 ANALISIS Y RESULTADOS")
             
