@@ -24,6 +24,8 @@ time_range = st.selectbox(
     ["24 horas", "48 horas","72 horas", "7 días", "30 días"]
 )
 
+debug_gemini = False
+
 # Límite de publicaciones a consultar (control de cuota)
 limite_opcion = st.selectbox(
     "Límite de publicaciones a consultar (control de cuota X)",
