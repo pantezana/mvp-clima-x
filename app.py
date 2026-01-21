@@ -14,8 +14,6 @@ st.title("🖥️ MVP – Clima del Tema en X")
 bearer_token = st.secrets["X_BEARER_TOKEN"]
 client = tweepy.Client(bearer_token=bearer_token)
 
-st.success("Conectado a X correctamente ✅")
-
 query = st.text_input("Palabras clave / hashtags")
 
 time_range = st.selectbox(
@@ -720,10 +718,4 @@ if st.button("Buscar en X"):
                 title="🏷️ Top términos dominantes (limpio de stopwords)"
             )
             st.plotly_chart(fig_terms, use_container_width=True)
-            
-         
-
-
-
-
 
