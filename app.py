@@ -33,8 +33,6 @@ limite_opcion = st.selectbox(
 
 max_posts = None if "Sin límite" in limite_opcion else int(limite_opcion)
 
-debug_gemini = st.checkbox("Debug Gemini", value=False)
-
 # ─────────────────────────────
 # Selector de modelo de sentimiento (Hugging Face)
 # ─────────────────────────────
