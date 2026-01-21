@@ -6,7 +6,6 @@ import requests
 import time
 import plotly.express as px
 import json
-import ast
 from datetime import datetime, timedelta
 
 st.set_page_config(page_title="MVP Clima en X", layout="wide")
@@ -171,52 +170,6 @@ def sentimiento_hf(texto: str):
     except Exception:
         return None, None
 
-def _extract_gemini_text(data: dict) -> str:
-    """Concatena todas las parts text."""
-    try:
-        cand = data.get("candidates", [])[0]
-        parts = cand.get("content", {}).get("parts", [])
-        texts = []
-        for p in parts:
-            t = p.get("text", "")
-            if t:
-                texts.append(t)
-        return "\n".join(texts).strip()
-    except Exception:
-        return ""
-
-def _strip_code_fences(text: str) -> str:
-    """Quita ```json ... ``` o ``` ... ``` si existen."""
-    text = text.strip()
-    # Quitar bloque inicial ```xxx
-    text = re.sub(r"^```[a-zA-Z0-9_-]*\s*", "", text)
-    # Quitar cierre ```
-    text = re.sub(r"\s*```$", "", text)
-    return text.strip()
-
-def _try_parse_json(text: str):
-    """Intenta parsear JSON incluso si viene envuelto en texto."""
-    if not text:
-        return None
-
-    text = _strip_code_fences(text)
-
-    # 1) Intento directo
-    try:
-        return json.loads(text)
-    except Exception:
-        pass
-
-    # 2) Intento: extraer el primer bloque { ... }
-    m = re.search(r"\{.*\}", text, re.DOTALL)
-    if m:
-        try:
-            return json.loads(m.group(0))
-        except Exception:
-            pass
-
-    return None
-
 def resumen_ejecutivo_gemini(payload: dict, debug: bool = False):
     """
     Retorna: (texto_resumen, status_str)
@@ -373,6 +326,73 @@ def fetch_tweets_paginado(
 
     return tweets_all, users_by_id
 
+# --- Preparación de texto
+            
+# Stopwords básicas en español (MVP)
+STOPWORDS = set([
+    "de","la","que","el","en","y","a","los","del","se","las","por","un","para","con",
+    "no","una","su","al","lo","como","más","pero","sus","le","ya","o","este","sí",
+    "porque","esta","entre","cuando","muy","sin","sobre"
+])
+            
+def limpiar_texto(texto):
+    palabras = re.findall(r"\b[a-záéíóúñ]+\b", (texto or "").lower())
+    return [p for p in palabras if p not in stopwords and len(p) > 3]
+
+# --- Sentimiento simple (léxico)
+POSITIVAS = set([
+# Aprobación directa
+"bueno","bien","positivo","excelente","correcto","adecuado","acertado","justo",
+                
+# Progreso / avance
+"avance","avanzar","mejora","mejorar","progreso","logro","logrado","resultado",
+                
+# Confianza / esperanza
+"confianza","esperanza","optimismo","tranquilidad","seguridad","estabilidad",
+                
+# Gestión / política pública
+"cumple","cumplió","eficiente","efectivo","funciona","solución","resuelve",
+                
+# Legitimidad / respaldo
+"apoyo","respaldo","legítimo","necesario","importante","prioritario",
+                
+# Éxito / impacto
+"exitoso","beneficio","beneficioso","impacto","histórico"
+])
+            
+NEGATIVAS = set([
+# Rechazo directo
+"malo","mal","negativo","pésimo","terrible","inaceptable","vergonzoso",
+                
+# Crisis / conflicto
+"crisis","conflicto","caos","problema","grave","colapso","fracaso",
+                
+# Desconfianza / enojo
+"indignación","enojo","rabia","molestia","hartazgo","descontento",
+                
+# Gestión deficiente
+"ineficiente","incapaz","incompetente","error","fallo","improvisación",
+                
+# Corrupción / legitimidad
+"corrupción","corrupto","ilegal","irregular","fraude","impunidad",
+                
+# Miedo / riesgo
+"peligro","amenaza","riesgo","inseguridad","violencia","abuso",
+                
+# Protesta / rechazo social
+"rechazo","repudio","protesta","denuncia","escándalo"
+])
+            
+def calcular_sentimiento(texto):
+    palabras = limpiar_texto(texto)
+    pos = sum(1 for p in palabras if p in positivas)
+    neg = sum(1 for p in palabras if p in negativas)
+    if pos > neg:
+        return "Positivo"
+    if neg > pos:
+        return "Negativo"
+    return "Neutral"
+
 
 if st.button("Buscar en X"):
     now = time.time()
@@ -454,74 +474,7 @@ if st.button("Buscar en X"):
 
 
         st.markdown("## 🧠 ANALISIS Y RESULTADOS")
-            
-        # --- Preparación de texto
-            
-        # Stopwords básicas en español (MVP)
-        stopwords = set([
-            "de","la","que","el","en","y","a","los","del","se","las","por","un","para","con",
-            "no","una","su","al","lo","como","más","pero","sus","le","ya","o","este","sí",
-            "porque","esta","entre","cuando","muy","sin","sobre"
-        ])
-            
-        def limpiar_texto(texto):
-            palabras = re.findall(r"\b[a-záéíóúñ]+\b", texto)
-            return [p for p in palabras if p not in stopwords and len(p) > 3]
-
-            # --- Sentimiento simple (léxico)
-        positivas = set([
-            # Aprobación directa
-            "bueno","bien","positivo","excelente","correcto","adecuado","acertado","justo",
-                
-            # Progreso / avance
-            "avance","avanzar","mejora","mejorar","progreso","logro","logrado","resultado",
-                
-            # Confianza / esperanza
-            "confianza","esperanza","optimismo","tranquilidad","seguridad","estabilidad",
-                
-            # Gestión / política pública
-            "cumple","cumplió","eficiente","efectivo","funciona","solución","resuelve",
-                
-            # Legitimidad / respaldo
-            "apoyo","respaldo","legítimo","necesario","importante","prioritario",
-                
-            # Éxito / impacto
-            "exitoso","beneficio","beneficioso","impacto","positivo","histórico"
-        ])
-            
-        negativas = set([
-            # Rechazo directo
-            "malo","mal","negativo","pésimo","terrible","inaceptable","vergonzoso",
-                
-             # Crisis / conflicto
-            "crisis","conflicto","caos","problema","grave","colapso","fracaso",
-                
-            # Desconfianza / enojo
-            "indignación","enojo","rabia","molestia","hartazgo","descontento",
-                
-            # Gestión deficiente
-            "ineficiente","incapaz","incompetente","error","fallo","improvisación",
-                
-             # Corrupción / legitimidad
-            "corrupción","corrupto","ilegal","irregular","fraude","impunidad",
-                
-            # Miedo / riesgo
-            "peligro","amenaza","riesgo","inseguridad","violencia","abuso",
-                
-            # Protesta / rechazo social
-            "rechazo","repudio","protesta","denuncia","escándalo"
-        ])
-            
-        def calcular_sentimiento(texto):
-            palabras = limpiar_texto(texto)
-            pos = sum(1 for p in palabras if p in positivas)
-            neg = sum(1 for p in palabras if p in negativas)
-            if pos > neg:
-                return "Positivo"
-            if neg > pos:
-                return "Negativo"
-            return "Neutral"
-            
+                        
         # 1) Intentamos con Hugging Face (IA)
         sent_hf = []
         score_hf = []
@@ -566,7 +519,7 @@ if st.button("Buscar en X"):
             
         # Narrativas dominantes (top términos)
         todas_palabras = []
-        for t in df["Texto"].str.lower().tolist():
+        for t in df["Texto"].tolist():
             todas_palabras.extend(limpiar_texto(t))
         top_terminos = pd.Series(todas_palabras).value_counts().head(15)
         top_terminos_list = top_terminos.index.tolist()
@@ -575,8 +528,7 @@ if st.button("Buscar en X"):
         # Top post influyente
         top_post = df.sort_values("Interacción", ascending=False).head(1)
         if len(top_post) > 0:
-            top_autor = str(top_post.iloc[0].get("Autor", "N/A"))
-            top_int = int(top_post.iloc[0].get("Interacción", 0))
+            top_autor = str(top_post.iloc[0].get("Autor", "N/A"))            
         else:
             top_autor, top_int = "N/A", 0
             
@@ -637,7 +589,7 @@ if st.button("Buscar en X"):
                 .to_html(escape=False, index=False),
                 unsafe_allow_html=True
             )
-            st.caption("Nota: la ubicación NO es exacta; es una inferencia basada en 'location' del perfil y/o bio. Úsala solo como aproximación.")
+        st.caption("Nota: la ubicación NO es exacta; es una inferencia basada en 'location' del perfil y/o bio. Úsala solo como aproximación.")
             
         # ─────────────────────────────
         # 🧮 PANEL EJECUTIVO (KPI + Alertas)
@@ -724,11 +676,11 @@ if st.button("Buscar en X"):
             for b in bullets[:12]:
                 st.markdown(f"- {b}")
             
-            # Advertencia metodológica (una sola vez, corta)
-            st.caption(
-                "Advertencia metodológica: señal temprana basada en publicaciones públicas de X; sentimiento automatizado (IA/fallback) "
-                "y ubicación inferida desde perfil/bio (no geolocalización exacta). No representa a toda la población."
-            )
+        # Advertencia metodológica (una sola vez, corta)
+        st.caption(
+            "Advertencia metodológica: señal temprana basada en publicaciones públicas de X; sentimiento automatizado (IA/fallback) "
+            "y ubicación inferida desde perfil/bio (no geolocalización exacta). No representa a toda la población."
+        )
             
             # ─────────────────────────────
             # 📊 TABLERO VISUAL (Plotly)
