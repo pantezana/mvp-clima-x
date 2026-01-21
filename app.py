@@ -635,7 +635,7 @@ if st.button("Buscar en X"):
                 .to_html(escape=False, index=False),
                 unsafe_allow_html=True
             )
-         st.caption("Nota: la ubicación NO es exacta; es una inferencia basada en 'location' del perfil y/o bio. Úsala solo como aproximación.")
+            st.caption("Nota: la ubicación NO es exacta; es una inferencia basada en 'location' del perfil y/o bio. Úsala solo como aproximación.")
             
         # ─────────────────────────────
         # 🧮 PANEL EJECUTIVO (KPI + Alertas)
