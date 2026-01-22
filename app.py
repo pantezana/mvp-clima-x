@@ -927,7 +927,14 @@ if st.button("Buscar en X"):
             else:
                 base["Fecha_ultima_quote"] = pd.NaT
             
-            base["Fechaua"] = base[["Fecha_ultima_amplificacion", "Fecha_ultima_quote"]].max(axis=1)
+            # ✅ forma robusta: fuerza datetime y luego calcula "la más reciente"
+            f1 = pd.to_datetime(base["Fecha_ultima_amplificacion"], errors="coerce")
+            f2 = pd.to_datetime(base["Fecha_ultima_quote"], errors="coerce")
+            
+            # Si una es NaT, usa la otra; si ambas existen, elige la mayor (más reciente)
+            base["Fechaua"] = f1.where(f1 >= f2, f2)
+            base["Fechaua"] = base["Fechaua"].fillna(f1).fillna(f2)
+
         
             # Likes totales amplificación (RT + quote)
             base["Likesta"] = base["Likes_total_amplificacion"] + base["Likes_total_quotes"]
