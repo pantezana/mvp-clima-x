@@ -1044,6 +1044,9 @@ if st.button("Buscar en X"):
                         url_por_original_id[str(_id)] = _url
         
             base["URL_original"] = base["original_id"].astype(str).apply(lambda oid: url_por_original_id.get(oid, f"https://x.com/i/web/status/{oid}"))
+
+            # Autor del tweet ORIGINAL
+            base["Autor"] = base["original_id"].astype(str).apply(lambda oid: autor_por_original_id.get(oid, "Desconocido"))
         
             # Texto del original:
             # - Si lo tenemos en df_rt_agregado (Texto_base_original), úsalo
@@ -1052,7 +1055,17 @@ if st.button("Buscar en X"):
                 base["Texto_base_original"] = ""
 
             base["Texto_original"] = base["Texto_base_original"]
-        
+
+            # ---------------------------------------------------------
+            # MAPA: original_id → Autor del tweet original
+            # ---------------------------------------------------------
+            autor_por_original_id = {}
+            
+            if not df_originales.empty:
+                for tid, autor in zip(df_originales["tweet_id"], df_originales["Autor"]):
+                    if tid:
+                        autor_por_original_id[str(tid)] = autor
+
             df_amplificacion = base.copy()
         
         # ---------------------------------------------------------
@@ -1505,6 +1518,7 @@ if st.button("Buscar en X"):
             df_amp_rank = df_amplificacion.copy()
         
         cols_top_amp = [
+            "Autor",                     # 👈 NUEVA PRIMERA COLUMNA
             "Fechaua",
             "Ampl_total", "RT_puros_en_rango", "Quotes_en_rango",
             "Likesta",
