@@ -788,8 +788,8 @@ if st.button("Buscar en X"):
         #     Incluye:
         #       - RT puros + Quotes (en rango)
         #       - Sentimiento_dominante ponderado por (RT_puros + Quotes)  ✅ (tu decisión)
-        #       - Fecha = Fecha_última_amplificación (tu decisión)
-        #       - Likes = Likes_total_amplificación (tu decisión)
+        #       - Fechaua = Fecha_última_amplificación (tu decisión)
+        #       - Likesta = Likes_total_amplificación (tu decisión)
         #     Nota: aquí además guardamos Ubicación/Confianza como “dominante” (modo)
         # ---------------------------------------------------------
         df_amplificacion = pd.DataFrame()
@@ -816,16 +816,16 @@ if st.button("Buscar en X"):
                 base[c] = pd.to_numeric(base[c], errors="coerce").fillna(0)
         
             # Amplificación total (en rango)
-            base["Amplificacion_total_en_rango"] = base["RT_puros_en_rango"] + base["Quotes_en_rango"]
+            base["Ampl_total"] = base["RT_puros_en_rango"] + base["Quotes_en_rango"]
         
             # Fecha última amplificación (recomendado)
             # - Preferimos max entre (Fecha_ultima_amplificacion, Fecha_ultima_quote)
             base["Fecha_ultima_amplificacion"] = pd.to_datetime(base.get("Fecha_ultima_amplificacion"), errors="coerce")
             base["Fecha_ultima_quote"] = pd.to_datetime(base.get("Fecha_ultima_quote"), errors="coerce")
-            base["Fecha"] = base[["Fecha_ultima_amplificacion", "Fecha_ultima_quote"]].max(axis=1)
+            base["Fechaua"] = base[["Fecha_ultima_amplificacion", "Fecha_ultima_quote"]].max(axis=1)
         
             # Likes totales amplificación (RT + quote)
-            base["Likes"] = base["Likes_total_amplificacion"] + base["Likes_total_quotes"]
+            base["Likesta"] = base["Likes_total_amplificacion"] + base["Likes_total_quotes"]
         
             # Retweets totales amplificación (RT + quote) (métrica adicional)
             base["Retweets"] = base["Retweets_total_amplificacion"] + base["Retweets_total_quotes"]
@@ -883,7 +883,7 @@ if st.button("Buscar en X"):
                 score_dom = round(float(weights[dom] / total_w), 3) if total_w else None
                 dominantes.append((dom, score_dom))
         
-            base["Sentimiento"] = [d[0] for d in dominantes]
+            base["Sentimiento_dominante"] = [d[0] for d in dominantes]
             base["Score_sent_dominante"] = [d[1] for d in dominantes]
         
             # ---------------------------
@@ -912,8 +912,8 @@ if st.button("Buscar en X"):
                     ubis.append(modo_safe(g["Ubicación inferida"]) if not g.empty else None)
                     confs.append(modo_safe(g["Confianza"]) if not g.empty else None)
         
-                base["Ubicación inferida"] = ubis
-                base["Confianza"] = confs
+                base["Ubicación_dominante"] = ubis
+                base["Confianza_dominante"] = confs
         
             # ---------------------------
             # Link “Abrir” al tweet original:
@@ -926,13 +926,15 @@ if st.button("Buscar en X"):
                     if _id:
                         url_por_original_id[str(_id)] = _url
         
-            base["URL"] = base["original_id"].astype(str).apply(lambda oid: url_por_original_id.get(oid, f"https://x.com/i/web/status/{oid}"))
+            base["URL_original"] = base["original_id"].astype(str).apply(lambda oid: url_por_original_id.get(oid, f"https://x.com/i/web/status/{oid}"))
         
             # Texto del original:
             # - Si lo tenemos en df_rt_agregado (Texto_base_original), úsalo
             # - Si no, vacío
             if "Texto_base_original" not in base.columns:
                 base["Texto_base_original"] = ""
+
+            base["Texto_original"] = base["Texto_base_original"]
         
             df_amplificacion = base.copy()
         
@@ -1012,8 +1014,8 @@ if st.button("Buscar en X"):
         amp_quotes_total = 0
         
         if df_amplificacion is not None and not df_amplificacion.empty:
-            amp_total_eventos = int(df_amplificacion["Amplificacion_total_en_rango"].sum())
-            amp_likes_total = int(df_amplificacion["Likes"].sum())
+            amp_total_eventos = int(df_amplificacion["Ampl_total"].sum())
+            amp_likes_total = int(df_amplificacion["Likesta"].sum())
             amp_rt_puros_total = int(df_amplificacion["RT_puros_en_rango"].sum())
             amp_quotes_total = int(df_amplificacion["Quotes_en_rango"].sum())
         
@@ -1074,7 +1076,7 @@ if st.button("Buscar en X"):
         # Ejemplos top amplificados (texto del tweet original amplificado)
         ejemplos_amp = []
         if df_amplificacion is not None and not df_amplificacion.empty:
-            top_amp = df_amplificacion.sort_values("Amplificacion_total_en_rango", ascending=False).head(8)
+            top_amp = df_amplificacion.sort_values("Ampl_total", ascending=False).head(8)
             for _, r in top_amp.iterrows():
                 txt = r.get("Texto_base_original", "") or ""
                 txt = (txt[:240] + "…") if isinstance(txt, str) and len(txt) > 240 else txt
@@ -1198,8 +1200,8 @@ if st.button("Buscar en X"):
         # - df_conversacion: originales + quotes (con Sentimiento por fila, Ubicación, Confianza, etc.)
         # - df_amplificacion: agregada por tweet ORIGINAL amplificado
         #   Debe contener (mínimo): original_id, Texto_original, URL_original,
-        #   Ampl_total (RT_puros+Quotes), RT_puros_count, Quotes_count,
-        #   Fecha_última_amplificación, Likes_total_amplificación,
+        #   Ampl_total (RT_puros+Quotes), RT_puros_en_rango, Quotes_en_rango,
+        #   Fechaua, Liketa,
         #   Sentimiento_dominante, Ubicación_dominante, Confianza_dominante
         #
         # Si tus nombres difieren, ajusta SOLO los nombres de columna en los selects.
@@ -1288,9 +1290,9 @@ if st.button("Buscar en X"):
             df_amp_rank = df_amplificacion.copy()
         
         cols_top_amp = [
-            "Fecha_última_amplificación",
-            "Ampl_total", "RT_puros_count", "Quotes_count",
-            "Likes_total_amplificación",
+            "Fechaua",
+            "Ampl_total", "RT_puros_en_rango", "Quotes_en_rango",
+            "Likesta",
             "Sentimiento_dominante",
             "Ubicación_dominante", "Confianza_dominante",
             "Texto_original",
@@ -1317,7 +1319,7 @@ if st.button("Buscar en X"):
         
         st.caption(
             "Nota: En Amplificación, se muestra el tweet ORIGINAL una sola vez por fila. "
-            "Los RT puros y quotes se contabilizan en columnas (RT_puros_count, Quotes_count, Ampl_total). "
+            "Los RT puros y quotes se contabilizan en columnas (RT_puros_en_rango, Quotes_en_rango, Ampl_total). "
             "El botón 'Abrir' siempre abre el tweet ORIGINAL."
         )
 
@@ -1346,11 +1348,11 @@ if st.button("Buscar en X"):
         n_originales_amplificados = int(len(df_amplificacion)) if df_amplificacion is not None else 0
         
         # Totales de amplificación
-        total_rt_puros = int(df_amplificacion["RT_puros_count"].sum()) if (df_amplificacion is not None and not df_amplificacion.empty) else 0
-        total_quotes = int(df_amplificacion["Quotes_count"].sum()) if (df_amplificacion is not None and not df_amplificacion.empty) else 0
+        total_rt_puros = int(df_amplificacion["RT_puros_en_rango"].sum()) if (df_amplificacion is not None and not df_amplificacion.empty) else 0
+        total_quotes = int(df_amplificacion["Quotes_en_rango"].sum()) if (df_amplificacion is not None and not df_amplificacion.empty) else 0
         total_ampl = int(df_amplificacion["Ampl_total"].sum()) if (df_amplificacion is not None and not df_amplificacion.empty) else 0
         
-        likes_total_amp = int(df_amplificacion["Likes_total_amplificación"].sum()) if (df_amplificacion is not None and not df_amplificacion.empty) else 0
+        likes_total_amp = int(df_amplificacion["Likesta"].sum()) if (df_amplificacion is not None and not df_amplificacion.empty) else 0
         
         # Interacción conversación (likes+RT de originales+quotes)
         interaccion_conversacion = int(df_conversacion["Interacción"].sum()) if (df_conversacion is not None and not df_conversacion.empty and "Interacción" in df_conversacion.columns) else 0
@@ -1378,10 +1380,10 @@ if st.button("Buscar en X"):
             if df_amp is None or df_amp.empty:
                 return 0.0, 0.0, 0.0
         
-            # Peso = RT_puros_count + Quotes_count (confirmado por ti)
+            # Peso = RT_puros_en_rango + Quotes_en_rango (confirmado por ti)
             df_tmp = df_amp.copy()
-            df_tmp["peso"] = pd.to_numeric(df_tmp["RT_puros_count"], errors="coerce").fillna(0) + \
-                             pd.to_numeric(df_tmp["Quotes_count"], errors="coerce").fillna(0)
+            df_tmp["peso"] = pd.to_numeric(df_tmp["RT_puros_en_rango"], errors="coerce").fillna(0) + \
+                             pd.to_numeric(df_tmp["Quotes_en_rango"], errors="coerce").fillna(0)
         
             total_peso = float(df_tmp["peso"].sum())
             if total_peso <= 0:
@@ -1619,7 +1621,7 @@ if st.button("Buscar en X"):
             if df_amplificacion is not None and not df_amplificacion.empty:
                 # armamos una tabla con pesos para el donut
                 tmp = df_amplificacion.copy()
-                tmp["peso"] = pd.to_numeric(tmp["RT_puros_count"], errors="coerce").fillna(0) + pd.to_numeric(tmp["Quotes_count"], errors="coerce").fillna(0)
+                tmp["peso"] = pd.to_numeric(tmp["RT_puros_en_rango"], errors="coerce").fillna(0) + pd.to_numeric(tmp["Quotes_en_rango"], errors="coerce").fillna(0)
                 sent_w = tmp.groupby("Sentimiento_dominante")["peso"].sum().reset_index()
                 sent_w.columns = ["Sentimiento", "Peso"]
                 fig_sent_amp = px.pie(sent_w, names="Sentimiento", values="Peso", hole=0.45, title="🧁 Sentimiento — Amplificación (ponderado)")
