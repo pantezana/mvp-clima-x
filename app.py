@@ -1436,7 +1436,7 @@ if st.button("Buscar en X"):
         # -----------------------------
         # 6) Mostrar KPIs (separados)
         # -----------------------------
-        k1, k2, k3, k10, k12,k13 = st.columns(5)
+        k1, k2, k3, k10, k12, k13 = st.columns(5)
         k1.metric("Conversación (posts)", f"{n_conversacion}")
         k2.metric("Temp. conversación", temp_conv)
         k3.metric("% Neg (conv)", f"{pct_neg_conv}%")
@@ -1444,7 +1444,7 @@ if st.button("Buscar en X"):
         k10.metric("Interacción (conv)", f"{interaccion_conversacion}")
         k12.metric("Narrativa #1 (conv)", narrativa_conv_1)
         
-        k4, k5, k6, k8, k9,k14 = st.columns(5)
+        k4, k5, k6, k8, k9, k14 = st.columns(5)
         k4.metric("Amplificación total", f"{total_ampl}")
         k5.metric("Temp. amplificación", temp_amp)
         k6.metric("% Neg (amp)", f"{pct_neg_amp}%")
