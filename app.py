@@ -927,17 +927,20 @@ if st.button("Buscar en X"):
             else:
                 base["Fecha_ultima_quote"] = pd.NaT
             
-            # ✅ forma robusta: fuerza datetime y luego calcula "la más reciente"
-            f1 = pd.to_datetime(base["Fecha_ultima_amplificacion"], errors="coerce")
-            f2 = pd.to_datetime(base["Fecha_ultima_quote"], errors="coerce")
-
-            st.write("Tipos:", base["Fecha_ultima_amplificacion"].dtype, base["Fecha_ultima_quote"].dtype)
-
-            # Si una es NaT, usa la otra; si ambas existen, elige la mayor (más reciente)
+            # 1) Aseguramos datetime
+            f1 = pd.to_datetime(base["Fecha_ultima_amplificacion"], errors="coerce", utc=True)
+            f2 = pd.to_datetime(base["Fecha_ultima_quote"], errors="coerce", utc=True)
+            
+            # 2) Quitamos la zona horaria (dejamos "naive") para poder comparar sin error
+            f1 = f1.dt.tz_convert(None)
+            f2 = f2.dt.tz_convert(None)
+            
+            # 3) Elegimos la más reciente entre ambas
             base["Fechaua"] = f1.where(f1 >= f2, f2)
             base["Fechaua"] = base["Fechaua"].fillna(f1).fillna(f2)
 
-        
+            st.write("Tipos:", base["Fecha_ultima_amplificacion"].dtype, base["Fecha_ultima_quote"].dtype)
+            
             # Likes totales amplificación (RT + quote)
             base["Likesta"] = base["Likes_total_amplificacion"] + base["Likes_total_quotes"]
         
