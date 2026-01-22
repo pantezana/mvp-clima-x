@@ -930,7 +930,9 @@ if st.button("Buscar en X"):
             # ✅ forma robusta: fuerza datetime y luego calcula "la más reciente"
             f1 = pd.to_datetime(base["Fecha_ultima_amplificacion"], errors="coerce")
             f2 = pd.to_datetime(base["Fecha_ultima_quote"], errors="coerce")
-            
+
+            st.write("Tipos:", base["Fecha_ultima_amplificacion"].dtype, base["Fecha_ultima_quote"].dtype)
+
             # Si una es NaT, usa la otra; si ambas existen, elige la mayor (más reciente)
             base["Fechaua"] = f1.where(f1 >= f2, f2)
             base["Fechaua"] = base["Fechaua"].fillna(f1).fillna(f2)
