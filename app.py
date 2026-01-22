@@ -1309,136 +1309,6 @@ if st.button("Buscar en X"):
         # ✅ Guardamos payload por si luego quieres exportar
         st.session_state["payload_gemini"] = payload
 
-        # =========================
-        # PARTE 6 — 4 TABLAS FINALES (Originales + Amplificación) con "Abrir"
-        # =========================
-        # ✅ Requisitos previos (de PARTE 3–5):
-        # - df_originales: solo posts originales dentro del rango (filas por tweet original)
-        # - df_conversacion: originales + quotes (con Sentimiento por fila, Ubicación, Confianza, etc.)
-        # - df_amplificacion: agregada por tweet ORIGINAL amplificado
-        #   Debe contener (mínimo): original_id, Texto_original, URL_original,
-        #   Ampl_total (RT_puros+Quotes), RT_puros_en_rango, Quotes_en_rango,
-        #   Fechaua, Liketa,
-        #   Sentimiento_dominante, Ubicación_dominante, Confianza_dominante
-        #
-        # Si tus nombres difieren, ajusta SOLO los nombres de columna en los selects.
-        
-        st.markdown("## 📌 Resultados en tablas (4 vistas)")
-        
-        def _make_open_link(url: str) -> str:
-            return f'<a href="{url}" target="_blank">Abrir</a>' if isinstance(url, str) and url else ""
-        
-        def render_table(df_show: pd.DataFrame, title: str, cols: list[str], top: int | None = None):
-            st.markdown(f"### {title}")
-            if df_show is None or df_show.empty:
-                st.info("No hay datos para mostrar en esta tabla con los filtros actuales.")
-                return
-        
-            _df = df_show.copy()
-        
-            # Top N si aplica
-            if isinstance(top, int) and top > 0:
-                _df = _df.head(top).copy()
-        
-            # Link HTML "Abrir"
-            if "Link" in cols:
-                if "URL" in _df.columns:
-                    _df["Link"] = _df["URL"].apply(_make_open_link)
-                elif "URL_original" in _df.columns:
-                    _df["Link"] = _df["URL_original"].apply(_make_open_link)
-                else:
-                    _df["Link"] = ""
-        
-            # Mostrar
-            st.markdown(
-                _df[cols].to_html(escape=False, index=False),
-                unsafe_allow_html=True
-            )
-        
-        # ------------------------------------------------------------
-        # TABLA 1) TOP 10 — Tweets originales (no RT) dentro del rango
-        # Ranking sugerido: Interacción = Likes + Retweets (del original)
-        # ------------------------------------------------------------
-        if not df_originales.empty:
-            df_originales_rank = df_originales.sort_values("Interacción", ascending=False).copy()
-        else:
-            df_originales_rank = df_originales.copy()
-        
-        # Asegura URL para originales (ya la tienes como "URL" en PARTE 3)
-        # Columnas: igual que tus tablas actuales + Abrir
-        cols_top_originales = [
-            "Autor", "Fecha", "Likes", "Retweets", "Interacción",
-            "Sentimiento", "Ubicación inferida", "Confianza",
-            "Texto", "Link"
-        ]
-        
-        # Importante: df_originales puede no tener "Sentimiento" si en PARTE 4 solo lo calculaste en df_conversacion.
-        # En ese caso, lo traemos desde df_conversacion (que incluye originales).
-        if "Sentimiento" not in df_originales_rank.columns:
-            if not df_conversacion.empty:
-                sent_map = df_conversacion.set_index("tweet_id")["Sentimiento"].to_dict()
-                df_originales_rank["Sentimiento"] = df_originales_rank["tweet_id"].map(sent_map)
-        
-        render_table(
-            df_originales_rank,
-            "1) 🔥 Top 10 — Posts originales (no RT)",
-            cols=cols_top_originales,
-            top=10
-        )
-        
-        # ------------------------------------------------------------
-        # TABLA 2) TODOS — Tweets originales (no RT) dentro del rango
-        # ------------------------------------------------------------
-        with st.expander("2) 📄 Ver TODOS los posts originales (no RT)"):
-            render_table(
-                df_originales_rank,  # ya rankeado; si prefieres por fecha, cambia aquí
-                "2) 📄 Todos — Posts originales (no RT)",
-                cols=cols_top_originales,
-                top=None
-            )
-        
-        # ------------------------------------------------------------
-        # TABLA 3) TOP 10 — Amplificación (muestra el TWEET ORIGINAL)
-        # Ranking: Ampl_total (RT puros + Quotes) en el rango
-        # ------------------------------------------------------------
-        if not df_amplificacion.empty:
-            df_amp_rank = df_amplificacion.sort_values("Ampl_total", ascending=False).copy()
-        else:
-            df_amp_rank = df_amplificacion.copy()
-        
-        cols_top_amp = [
-            "Fechaua",
-            "Ampl_total", "RT_puros_en_rango", "Quotes_en_rango",
-            "Likesta",
-            "Sentimiento_dominante",
-            "Ubicación_dominante", "Confianza_dominante",
-            "Texto_original",
-            "Link"
-        ]
-        
-        render_table(
-            df_amp_rank,
-            "3) 📣 Top 10 — Amplificación (muestra el tweet ORIGINAL amplificado)",
-            cols=cols_top_amp,
-            top=10
-        )
-        
-        # ------------------------------------------------------------
-        # TABLA 4) TODOS — Amplificación (muestra el TWEET ORIGINAL)
-        # ------------------------------------------------------------
-        with st.expander("4) 📄 Ver TODA la amplificación (tweet ORIGINAL agregado)"):
-            render_table(
-                df_amp_rank,
-                "4) 📄 Toda la amplificación (tweet ORIGINAL agregado)",
-                cols=cols_top_amp,
-                top=None
-            )
-        
-        st.caption(
-            "Nota: En Amplificación, se muestra el tweet ORIGINAL una sola vez por fila. "
-            "Los RT puros y quotes se contabilizan en columnas (RT_puros_en_rango, Quotes_en_rango, Ampl_total). "
-            "El botón 'Abrir' siempre abre el tweet ORIGINAL."
-        )
 
         # =========================
         # PARTE 7 — KPI + Alertas + Resumen Gemini + Gráficos (con nueva lógica de sentimientos)
@@ -1566,22 +1436,22 @@ if st.button("Buscar en X"):
         # -----------------------------
         # 6) Mostrar KPIs (separados)
         # -----------------------------
-        k1, k2, k3, k4, k5, k6 = st.columns(6)
+        k1, k2, k3, k10, k12,k13 = st.columns(5)
         k1.metric("Conversación (posts)", f"{n_conversacion}")
         k2.metric("Temp. conversación", temp_conv)
         k3.metric("% Neg (conv)", f"{pct_neg_conv}%")
+        k13.metric("% Pos (conv)", f"{pct_pos_conv}%")
+        k10.metric("Interacción (conv)", f"{interaccion_conversacion}")
+        k12.metric("Narrativa #1 (conv)", narrativa_conv_1)
+        
+        k4, k5, k6, k8, k9,k14 = st.columns(5)
         k4.metric("Amplificación total", f"{total_ampl}")
         k5.metric("Temp. amplificación", temp_amp)
         k6.metric("% Neg (amp)", f"{pct_neg_amp}%")
-        
-        k7, k8, k9, k10, k11, k12 = st.columns(6)
-        k7.metric("Originales", f"{n_originales}")
+        k14.metric("% Pos (amp)", f"{pct_pos_amp}%")
         k8.metric("Quotes", f"{n_quotes}")
         k9.metric("RT puros", f"{n_rt_puros}")
-        k10.metric("Interacción (conv)", f"{interaccion_conversacion}")
-        k11.metric("Likes (ampl)", f"{likes_total_amp}")
-        k12.metric("Narrativa #1 (conv)", narrativa_conv_1)
-        
+    
         st.caption(
             f"Conv: Pos {pct_pos_conv}% | Neu {pct_neu_conv}% | Neg {pct_neg_conv}% — "
             f"Amp (ponderado): Pos {pct_pos_amp}% | Neu {pct_neu_amp}% | Neg {pct_neg_amp}%."
@@ -1775,3 +1645,133 @@ if st.button("Buscar en X"):
                 st.info("Sin términos dominantes en amplificación.")
 
 
+        # =========================
+        # PARTE 6 — 4 TABLAS FINALES (Originales + Amplificación) con "Abrir"
+        # =========================
+        # ✅ Requisitos previos (de PARTE 3–5):
+        # - df_originales: solo posts originales dentro del rango (filas por tweet original)
+        # - df_conversacion: originales + quotes (con Sentimiento por fila, Ubicación, Confianza, etc.)
+        # - df_amplificacion: agregada por tweet ORIGINAL amplificado
+        #   Debe contener (mínimo): original_id, Texto_original, URL_original,
+        #   Ampl_total (RT_puros+Quotes), RT_puros_en_rango, Quotes_en_rango,
+        #   Fechaua, Liketa,
+        #   Sentimiento_dominante, Ubicación_dominante, Confianza_dominante
+        #
+        # Si tus nombres difieren, ajusta SOLO los nombres de columna en los selects.
+        
+        st.markdown("## 📌 Resultados en tablas (4 vistas)")
+        
+        def _make_open_link(url: str) -> str:
+            return f'<a href="{url}" target="_blank">Abrir</a>' if isinstance(url, str) and url else ""
+        
+        def render_table(df_show: pd.DataFrame, title: str, cols: list[str], top: int | None = None):
+            st.markdown(f"### {title}")
+            if df_show is None or df_show.empty:
+                st.info("No hay datos para mostrar en esta tabla con los filtros actuales.")
+                return
+        
+            _df = df_show.copy()
+        
+            # Top N si aplica
+            if isinstance(top, int) and top > 0:
+                _df = _df.head(top).copy()
+        
+            # Link HTML "Abrir"
+            if "Link" in cols:
+                if "URL" in _df.columns:
+                    _df["Link"] = _df["URL"].apply(_make_open_link)
+                elif "URL_original" in _df.columns:
+                    _df["Link"] = _df["URL_original"].apply(_make_open_link)
+                else:
+                    _df["Link"] = ""
+        
+            # Mostrar
+            st.markdown(
+                _df[cols].to_html(escape=False, index=False),
+                unsafe_allow_html=True
+            )
+        
+        # ------------------------------------------------------------
+        # TABLA 1) TOP 10 — Tweets originales (no RT) dentro del rango
+        # Ranking sugerido: Interacción = Likes + Retweets (del original)
+        # ------------------------------------------------------------
+        if not df_originales.empty:
+            df_originales_rank = df_originales.sort_values("Interacción", ascending=False).copy()
+        else:
+            df_originales_rank = df_originales.copy()
+        
+        # Asegura URL para originales (ya la tienes como "URL" en PARTE 3)
+        # Columnas: igual que tus tablas actuales + Abrir
+        cols_top_originales = [
+            "Autor", "Fecha", "Likes", "Retweets", "Interacción",
+            "Sentimiento", "Ubicación inferida", "Confianza",
+            "Texto", "Link"
+        ]
+        
+        # Importante: df_originales puede no tener "Sentimiento" si en PARTE 4 solo lo calculaste en df_conversacion.
+        # En ese caso, lo traemos desde df_conversacion (que incluye originales).
+        if "Sentimiento" not in df_originales_rank.columns:
+            if not df_conversacion.empty:
+                sent_map = df_conversacion.set_index("tweet_id")["Sentimiento"].to_dict()
+                df_originales_rank["Sentimiento"] = df_originales_rank["tweet_id"].map(sent_map)
+        
+        render_table(
+            df_originales_rank,
+            "1) 🔥 Top 10 — Posts originales (no RT)",
+            cols=cols_top_originales,
+            top=10
+        )
+        
+        # ------------------------------------------------------------
+        # TABLA 2) TODOS — Tweets originales (no RT) dentro del rango
+        # ------------------------------------------------------------
+        with st.expander("2) 📄 Ver TODOS los posts originales (no RT)"):
+            render_table(
+                df_originales_rank,  # ya rankeado; si prefieres por fecha, cambia aquí
+                "2) 📄 Todos — Posts originales (no RT)",
+                cols=cols_top_originales,
+                top=None
+            )
+        
+        # ------------------------------------------------------------
+        # TABLA 3) TOP 10 — Amplificación (muestra el TWEET ORIGINAL)
+        # Ranking: Ampl_total (RT puros + Quotes) en el rango
+        # ------------------------------------------------------------
+        if not df_amplificacion.empty:
+            df_amp_rank = df_amplificacion.sort_values("Ampl_total", ascending=False).copy()
+        else:
+            df_amp_rank = df_amplificacion.copy()
+        
+        cols_top_amp = [
+            "Fechaua",
+            "Ampl_total", "RT_puros_en_rango", "Quotes_en_rango",
+            "Likesta",
+            "Sentimiento_dominante",
+            "Ubicación_dominante", "Confianza_dominante",
+            "Texto_original",
+            "Link"
+        ]
+        
+        render_table(
+            df_amp_rank,
+            "3) 📣 Top 10 — Amplificación (muestra el tweet ORIGINAL amplificado)",
+            cols=cols_top_amp,
+            top=10
+        )
+        
+        # ------------------------------------------------------------
+        # TABLA 4) TODOS — Amplificación (muestra el TWEET ORIGINAL)
+        # ------------------------------------------------------------
+        with st.expander("4) 📄 Ver TODA la amplificación (tweet ORIGINAL agregado)"):
+            render_table(
+                df_amp_rank,
+                "4) 📄 Toda la amplificación (tweet ORIGINAL agregado)",
+                cols=cols_top_amp,
+                top=None
+            )
+        
+        st.caption(
+            "Nota: En Amplificación, se muestra el tweet ORIGINAL una sola vez por fila. "
+            "Los RT puros y quotes se contabilizan en columnas (RT_puros_en_rango, Quotes_en_rango, Ampl_total). "
+            "El botón 'Abrir' siempre abre el tweet ORIGINAL."
+        )
