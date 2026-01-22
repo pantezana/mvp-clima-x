@@ -1044,10 +1044,7 @@ if st.button("Buscar en X"):
                         url_por_original_id[str(_id)] = _url
         
             base["URL_original"] = base["original_id"].astype(str).apply(lambda oid: url_por_original_id.get(oid, f"https://x.com/i/web/status/{oid}"))
-
-            # Autor del tweet ORIGINAL
-            base["Autor"] = base["original_id"].astype(str).apply(lambda oid: autor_por_original_id.get(oid, "Desconocido"))
-        
+      
             # Texto del original:
             # - Si lo tenemos en df_rt_agregado (Texto_base_original), úsalo
             # - Si no, vacío
@@ -1065,6 +1062,9 @@ if st.button("Buscar en X"):
                 for tid, autor in zip(df_originales["tweet_id"], df_originales["Autor"]):
                     if tid:
                         autor_por_original_id[str(tid)] = autor
+
+            # Autor del tweet ORIGINAL
+            base["Autor"] = base["original_id"].astype(str).apply(lambda oid: autor_por_original_id.get(oid, "Desconocido"))
 
             df_amplificacion = base.copy()
         
