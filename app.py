@@ -54,23 +54,34 @@ st.caption(
 
 def build_x_query(base_query: str, incluir_originales: bool, incluir_retweets: bool, incluir_quotes: bool) -> str:
     """
-    Construye el query final para X (Twitter) combinando filtros.
-    - Originales: excluimos retweets (y opcionalmente excluimos quotes si no se quieren).
-    - RT puros: incluye 'is:retweet' y excluye 'is:quote' para no mezclar.
-    - Quotes: incluye 'is:quote'
-    IMPORTANTE: Según tu decisión, luego lo unificaremos en una sola llamada o varias.
-    Por ahora dejamos el helper listo (y seguro) para usarlo en la PARTE 2/3.
+    Construye query para X aplicando filtros SOLO cuando el usuario eligió 1 solo tipo.
+    Si el usuario eligió combinaciones, NO filtra (lo resolveremos con llamadas separadas).
     """
     q = (base_query or "").strip()
     if not q:
-        return q
+        return ""
 
-    partes = [f"({q})"]
+    # Siempre agrupamos el término base
+    base = f"({q})"
 
-    # Si se eligen combinaciones, NO aplicamos filtros aquí todavía.
-    # En PARTE 2/3 haremos UNA SOLA llamada con todo y separaremos por campos.
-    # Este helper queda por si luego quieres hacer "modo avanzado" (consultas separadas).
-    return " ".join(partes)
+    seleccionados = sum([incluir_originales, incluir_retweets, incluir_quotes])
+
+    # ✅ Si SOLO eligió 1 tipo, filtramos en el query para ahorrar cuota
+    if seleccionados == 1:
+        if incluir_retweets:
+            # RT puros: retweet sí, quote no
+            return f"{base} is:retweet -is:quote"
+        if incluir_quotes:
+            # Quotes
+            return f"{base} is:quote"
+        if incluir_originales:
+            # Originales: NO retweet, NO quote
+            # (Si quieres permitir replies, esto está OK. Si quieres excluir replies también, agrega: -is:reply)
+            return f"{base} -is:retweet -is:quote"
+
+    # ✅ Si eligió 2 o 3 tipos, devolvemos SOLO el base y resolvemos con múltiples llamadas
+    return base
+
 
 # Query final (por ahora igual al base; se usa en la llamada)
 query_final = build_x_query(query, incluir_originales, incluir_retweets, incluir_quotes)
@@ -440,6 +451,87 @@ def calcular_sentimiento(texto):
         return "Negativo"
     return "Neutral"
 
+def fetch_por_tipo(client, base_query, start_time, max_posts, tweet_fields_req, expansions_req, user_fields_req,
+                   incluir_originales, incluir_retweets, incluir_quotes):
+    """
+    Devuelve:
+      - tweets_data: lista combinada de tweets
+      - users_by_id: dict combinado
+    Estrategia:
+      - Si solo 1 tipo seleccionado -> 1 llamada con filtros (ahorra cuota)
+      - Si 2 o 3 tipos -> N llamadas (una por tipo seleccionado) con filtros estrictos
+    """
+
+    seleccionados = []
+    if incluir_originales: seleccionados.append("ORIG")
+    if incluir_retweets:   seleccionados.append("RT")
+    if incluir_quotes:     seleccionados.append("QUOTE")
+
+    if len(seleccionados) == 0:
+        return [], {}
+
+    # Reparto de cupo si hay varias llamadas (para no multiplicar cuota)
+    if max_posts is None:
+        limites = {t: None for t in seleccionados}  # sin límite por tipo
+    else:
+        per = max(10, max_posts // len(seleccionados))  # mínimo 10 por llamada
+        limites = {t: per for t in seleccionados}
+        # Reparto del остаток (remainder)
+        rem = max_posts - per * len(seleccionados)
+        i = 0
+        while rem > 0:
+            limites[seleccionados[i]] += 1
+            rem -= 1
+            i = (i + 1) % len(seleccionados)
+
+    # Construimos queries por tipo
+    q_base = f"({base_query.strip()})"
+
+    queries = {}
+    if len(seleccionados) == 1:
+        # ✅ 1 sola llamada (usa build_x_query optimizado)
+        q_final = build_x_query(base_query, incluir_originales, incluir_retweets, incluir_quotes)
+        queries[seleccionados[0]] = q_final
+    else:
+        # ✅ varias llamadas, una por tipo
+        if incluir_originales:
+            queries["ORIG"] = f"{q_base} -is:retweet -is:quote"
+        if incluir_retweets:
+            queries["RT"] = f"{q_base} is:retweet -is:quote"
+        if incluir_quotes:
+            queries["QUOTE"] = f"{q_base} is:quote"
+
+    # Ejecutamos llamadas y unimos resultados
+    tweets_all = []
+    users_all = {}
+
+    for tipo, q in queries.items():
+        tdata, udata = fetch_tweets_paginado(
+            client=client,
+            query=q,
+            start_time=start_time,
+            max_posts=limites.get(tipo),
+            tweet_fields=tweet_fields_req,
+            expansions=expansions_req,
+            user_fields=user_fields_req
+        )
+
+        if tdata:
+            tweets_all.extend(tdata)
+        if udata:
+            users_all.update(udata)
+
+    # ✅ Deduplicar por tweet_id (por seguridad)
+    seen = set()
+    tweets_unique = []
+    for t in tweets_all:
+        tid = str(getattr(t, "id", ""))
+        if tid and tid not in seen:
+            seen.add(tid)
+            tweets_unique.append(t)
+
+    return tweets_unique, users_all
+
 
 if st.button("Buscar en X"):
     now = time.time()
@@ -486,20 +578,24 @@ if st.button("Buscar en X"):
             
             user_fields_req = ["username", "name", "location", "description"]
             
-            # Llamada paginada (una sola)
-            tweets_data, users_by_id = fetch_tweets_paginado(
+            # ✅ Llamadas inteligentes (1 o varias según checks)
+            base_query = query.strip()
+            tweets_data, users_by_id = fetch_por_tipo(
                 client=client,
-                query=query_final,
+                base_query=base_query,
                 start_time=start_time,
                 max_posts=max_posts,
-                tweet_fields=tweet_fields_req,
-                expansions=expansions_req,
-                user_fields=user_fields_req
+                tweet_fields_req=tweet_fields_req,
+                expansions_req=expansions_req,
+                user_fields_req=user_fields_req,
+                incluir_originales=incl_originales,
+                incluir_retweets=incl_retweets,
+                incluir_quotes=incl_quotes
             )
-            
+             
             # Guardamos en session_state por si luego quieres exportar / depurar
             st.session_state["tweets_data_count"] = len(tweets_data) if tweets_data else 0
-
+        
         except tweepy.errors.TooManyRequests as e:
             # Intentar leer "reset time" si existe
             reset_info = ""
@@ -820,8 +916,17 @@ if st.button("Buscar en X"):
         
             # Fecha última amplificación (recomendado)
             # - Preferimos max entre (Fecha_ultima_amplificacion, Fecha_ultima_quote)
-            base["Fecha_ultima_amplificacion"] = pd.to_datetime(base.get("Fecha_ultima_amplificacion"), errors="coerce")
-            base["Fecha_ultima_quote"] = pd.to_datetime(base.get("Fecha_ultima_quote"), errors="coerce")
+ 
+            if "Fecha_ultima_amplificacion" in base.columns:
+                base["Fecha_ultima_amplificacion"] = pd.to_datetime(base["Fecha_ultima_amplificacion"], errors="coerce")
+            else:
+                base["Fecha_ultima_amplificacion"] = pd.NaT
+            
+            if "Fecha_ultima_quote" in base.columns:
+                base["Fecha_ultima_quote"] = pd.to_datetime(base["Fecha_ultima_quote"], errors="coerce")
+            else:
+                base["Fecha_ultima_quote"] = pd.NaT
+            
             base["Fechaua"] = base[["Fecha_ultima_amplificacion", "Fecha_ultima_quote"]].max(axis=1)
         
             # Likes totales amplificación (RT + quote)
