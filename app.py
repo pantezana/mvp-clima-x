@@ -1256,13 +1256,16 @@ if st.button("Buscar en X"):
         # -----------------------------
         # 6) Mostrar KPIs (separados)
         # -----------------------------
-        k1, k2, k3, k13, k10, k12 = st.columns(6)
-        k1.metric("Conversación (posts)", f"{n_conversacion}")
-        k2.metric("Temp. conversación", temp_conv)
-        k3.metric("% Neg (conv)", f"{pct_neg_conv}%")
-        k13.metric("% Pos (conv)", f"{pct_pos_conv}%")
-        k10.metric("Interacción (conv)", f"{interaccion_conversacion}")
-        k12.metric("Narrativa #1 (conv)", narrativa_conv_1)
+        if incl_originales or incl_quotes:
+            k1, k2, k3, k13, k10, k12 = st.columns(6)
+            k1.metric("Conversación (posts)", f"{n_conversacion}")
+            k2.metric("Temp. conversación", temp_conv)
+            k3.metric("% Neg (conv)", f"{pct_neg_conv}%")
+            k13.metric("% Pos (conv)", f"{pct_pos_conv}%")
+            k10.metric("Interacción (conv)", f"{interaccion_conversacion}")
+            k12.metric("Narrativa #1 (conv)", narrativa_conv_1)
+        else:
+            st.info("Conversación oculta: no está seleccionado 'Posts originales' o 'RT con cita'.")
         
         # ✅ Mostrar fila de Amplificación SOLO si el usuario marcó RT puros
         if incl_retweets:
@@ -1271,15 +1274,25 @@ if st.button("Buscar en X"):
             k5.metric("Temp. amplificación", temp_amp)
             k6.metric("% Neg (amp)", f"{pct_neg_amp}%")
             k14.metric("% Pos (amp)", f"{pct_pos_amp}%")
-            k8.metric("Quotes", f"{n_quotes}")
-            k9.metric("RT puros", f"{n_rt_puros}")
+            k8.metric("Likesta (amp)", f"{likes_total_amp}")
+            k9.metric("Narrativa #1 (amp)", narrativa_amp_1)
         else:
             st.info("Amplificación oculta: no está seleccionado 'RT puros'.")
 
-        st.caption(
-            f"Conv: Pos {pct_pos_conv}% | Neu {pct_neu_conv}% | Neg {pct_neg_conv}% — "
-            f"Amp (ponderado): Pos {pct_pos_amp}% | Neu {pct_neu_amp}% | Neg {pct_neg_amp}%."
-        )
+        # ✅ Caption solo de lo que está visible (para no confundir)
+        if (incl_originales or incl_quotes) and incl_retweets:
+            st.caption(
+                f"Conv: Pos {pct_pos_conv}% | Neu {pct_neu_conv}% | Neg {pct_neg_conv}% — "
+                f"Amp (ponderado): Pos {pct_pos_amp}% | Neu {pct_neu_amp}% | Neg {pct_neg_amp}%."
+            )
+        elif (incl_originales or incl_quotes) and (not incl_retweets):
+            st.caption(
+                f"Conv: Pos {pct_pos_conv}% | Neu {pct_neu_conv}% | Neg {pct_neg_conv}%."
+            )
+        elif (not (incl_originales or incl_quotes)) and incl_retweets:
+            st.caption(
+                f"Amp (ponderado): Pos {pct_pos_amp}% | Neu {pct_neu_amp}% | Neg {pct_neg_amp}%."
+            )
         
         # -----------------------------
         # 7) Alertas (ajustadas a nueva lógica)
