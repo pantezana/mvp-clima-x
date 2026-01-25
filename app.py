@@ -32,7 +32,7 @@ limite_opcion = st.selectbox(
 
 max_posts = None if "Sin límite" in limite_opcion else int(limite_opcion)
 
-st.markdown("### 🎛️ Tipo de contenido a analizar")
+st.markdown("### Tipo de contenido a analizar")
 
 c1, c2, c3 = st.columns(3)
 with c1:
