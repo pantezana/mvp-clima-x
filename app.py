@@ -923,117 +923,38 @@ if st.button("Buscar en X"):
                 df_quotes_agregado["original_id"] = df_quotes_agregado["original_id"].astype(str)
 
         # ---------------------------------------------------------
-        # 4.5) Construir df_amplificacion (una sola tabla, 1 fila por tweet original)
-        #     Incluye:
-        #       - RT puros + Quotes (en rango)
-        #       - Sentimiento_dominante ponderado por (RT_puros + Quotes)  ✅ (tu decisión)
-        #       - Fechaua = Fecha_última_amplificación (tu decisión)
-        #       - Likesta = Likes_total_amplificación (tu decisión)
-        #     Nota: aquí además guardamos Ubicación/Confianza como “dominante” (modo)
+        # 4.5) Construir df_amplificacion (una sola tabla, 1 fila por tweet original)        
+        #     Construir df_amplificacion SOLO con RT puros
+        #     (Quotes NO entran aquí; ya están en Conversación)
         # ---------------------------------------------------------
         df_amplificacion = pd.DataFrame()
-
-        # ✅ REGLA: Solo construimos amplificación si el usuario marcó "RT puros"
-        # (si solo eligió Quotes, NO debe salir el panel/gráfico de amplificación)
-        if incl_retweets and ((not df_rt_agregado.empty) or (not df_quotes_agregado.empty)):
         
-            # Base = unión por original_id
+        if incl_retweets and (df_rt_agregado is not None) and (not df_rt_agregado.empty):
+        
             base = df_rt_agregado.copy()
-            if base.empty:
-                base = pd.DataFrame({"original_id": df_quotes_agregado["original_id"].astype(str)})
-        
             base["original_id"] = base["original_id"].astype(str)
         
-            base = base.merge(df_quotes_agregado, on="original_id", how="outer")
+            # Amplificación total = SOLO RT puros
+            base["Ampl_total"] = pd.to_numeric(base["RT_puros_en_rango"], errors="coerce").fillna(0)
         
-            # Rellenos
-            for c in ["RT_puros_en_rango", "Likes_total_amplificacion", "Retweets_total_amplificacion"]:
-                if c not in base.columns:
-                    base[c] = 0
-                base[c] = pd.to_numeric(base[c], errors="coerce").fillna(0)
+            # Fecha última amplificación
+            base["Fecha_ultima_amplificacion"] = pd.to_datetime(base.get("Fecha_ultima_amplificacion"), errors="coerce", utc=True)
+            base["Fechaua"] = base["Fecha_ultima_amplificacion"].dt.tz_convert(None)
         
-            for c in ["Quotes_en_rango", "Likes_total_quotes", "Retweets_total_quotes"]:
-                if c not in base.columns:
-                    base[c] = 0
-                base[c] = pd.to_numeric(base[c], errors="coerce").fillna(0)
+            # Likes totales amplificación (RT puros)
+            base["Likesta"] = pd.to_numeric(base.get("Likes_total_amplificacion"), errors="coerce").fillna(0)
         
-            # Amplificación total (en rango)
-            base["Ampl_total"] = base["RT_puros_en_rango"] + base["Quotes_en_rango"]
-        
-            # Fecha última amplificación (recomendado)
-            if "Fecha_ultima_amplificacion" in base.columns:
-                base["Fecha_ultima_amplificacion"] = pd.to_datetime(base["Fecha_ultima_amplificacion"], errors="coerce")
-            else:
-                base["Fecha_ultima_amplificacion"] = pd.NaT
-        
-            if "Fecha_ultima_quote" in base.columns:
-                base["Fecha_ultima_quote"] = pd.to_datetime(base["Fecha_ultima_quote"], errors="coerce")
-            else:
-                base["Fecha_ultima_quote"] = pd.NaT
-        
-            f1 = pd.to_datetime(base["Fecha_ultima_amplificacion"], errors="coerce", utc=True)
-            f2 = pd.to_datetime(base["Fecha_ultima_quote"], errors="coerce", utc=True)
-        
-            f1 = f1.dt.tz_convert(None)
-            f2 = f2.dt.tz_convert(None)
-        
-            base["Fechaua"] = f1.where(f1 >= f2, f2)
-            base["Fechaua"] = base["Fechaua"].fillna(f1).fillna(f2)
-        
-            # ✅ (Opcional) Quita este debug cuando ya funcione
-            # st.write("Tipos:", base["Fecha_ultima_amplificacion"].dtype, base["Fecha_ultima_quote"].dtype)
-        
-            # Likes totales amplificación (RT + quote)
-            base["Likesta"] = base["Likes_total_amplificacion"] + base["Likes_total_quotes"]
-        
-            # Retweets totales amplificación (RT + quote)
-            base["Retweets"] = base["Retweets_total_amplificacion"] + base["Retweets_total_quotes"]
+            # Retweets totales amplificación (RT puros)
+            base["Retweets"] = pd.to_numeric(base.get("Retweets_total_amplificacion"), errors="coerce").fillna(0)
         
             # ---------------------------
-            # Sentimiento dominante ponderado (RT_puros + quotes)
+            # Sentimiento dominante = SOLO RT puros (ya viene por original)
             # ---------------------------
-            sentiment_map = {}
-        
-            if not df_rt_agregado.empty:
-                for _, row in df_rt_agregado.iterrows():
-                    oid = str(row.get("original_id"))
-                    sent = row.get("Sentimiento_original")
-                    w = float(row.get("RT_puros_en_rango", 0) or 0)
-                    if not oid:
-                        continue
-                    sentiment_map.setdefault(oid, {"Positivo": 0.0, "Neutral": 0.0, "Negativo": 0.0})
-                    if sent in sentiment_map[oid]:
-                        sentiment_map[oid][sent] += w
-        
-            if not df_quotes.empty:
-                df_quotes_sent = df_conversacion[df_conversacion["tipo"] == "Quote"].copy()
-                if not df_quotes_sent.empty:
-                    for _, r in df_quotes_sent.iterrows():
-                        oid = str(r.get("original_id"))
-                        sent = r.get("Sentimiento")
-                        if not oid:
-                            continue
-                        sentiment_map.setdefault(oid, {"Positivo": 0.0, "Neutral": 0.0, "Negativo": 0.0})
-                        if sent in sentiment_map[oid]:
-                            sentiment_map[oid][sent] += 1.0
-        
-            dominantes = []
-            for _, row in base.iterrows():
-                oid = str(row.get("original_id"))
-                weights = sentiment_map.get(oid, {"Positivo": 0.0, "Neutral": 0.0, "Negativo": 0.0})
-                total_w = sum(weights.values()) if weights else 0.0
-                if total_w <= 0:
-                    dominantes.append(("Neutral", None))
-                    continue
-                dom = max(weights.items(), key=lambda kv: kv[1])[0]
-                score_dom = round(float(weights[dom] / total_w), 3) if total_w else None
-                dominantes.append((dom, score_dom))
-        
-            base["Sentimiento_dominante"] = [d[0] for d in dominantes]
-            base["Score_sent_dominante"] = [d[1] for d in dominantes]
+            base["Sentimiento_dominante"] = base.get("Sentimiento_original")
+            base["Score_sent_dominante"] = base.get("Score_original")
         
             # ---------------------------
-            # Ubicación/Confianza dominante (modo)
+            # Ubicación/Confianza dominante SOLO desde RT puros
             # ---------------------------
             def modo_safe(series):
                 if series is None or len(series) == 0:
@@ -1047,7 +968,7 @@ if st.button("Buscar en X"):
                     return s.iloc[0]
         
             if not df_raw.empty:
-                amp_rows = df_raw[df_raw["tipo"].isin(["RT", "Quote"]) & df_raw["original_id"].notna()].copy()
+                amp_rows = df_raw[(df_raw["tipo"] == "RT") & df_raw["original_id"].notna()].copy()
         
                 ubis = []
                 confs = []
@@ -1059,7 +980,7 @@ if st.button("Buscar en X"):
                 base["Ubicación_dominante"] = ubis
                 base["Confianza_dominante"] = confs
         
-            # URL original
+            # URL original (si no lo tenemos, fallback)
             url_por_original_id = {}
             if not df_originales.empty:
                 for _id, _url in zip(df_originales["tweet_id"].tolist(), df_originales["URL"].tolist()):
@@ -1070,16 +991,10 @@ if st.button("Buscar en X"):
                 lambda oid: url_por_original_id.get(oid, f"https://x.com/i/web/status/{oid}")
             )
         
-            # Texto del original
-            if "Texto_base_original" not in base.columns:
-                base["Texto_base_original"] = ""
-            base["Texto_original"] = base["Texto_base_original"]
-            # ✅ Normalizar para que nunca llegue NaN / float
-            base["Texto_original"] = base["Texto_original"].fillna("")
-            base["Texto_original"] = base["Texto_original"].astype(str)
-
+            # Texto del original (si no está en originales, usamos fallback del RT puro guardado)
+            base["Texto_original"] = base.get("Texto_base_original", "").fillna("").astype(str)
         
-            # Autor original
+            # Autor original (si no está en originales, queda desconocido, pero ya NO mezclarás quotes aquí)
             autor_por_original_id = {}
             if not df_originales.empty:
                 for tid, autor in zip(df_originales["tweet_id"], df_originales["Autor"]):
@@ -1088,9 +1003,11 @@ if st.button("Buscar en X"):
         
             base["Autor"] = base["original_id"].astype(str).apply(lambda oid: autor_por_original_id.get(oid, "Desconocido"))
         
+            # ✅ muy importante: solo dejamos filas con RT>0
+            base = base[base["Ampl_total"] > 0].copy()
+        
             df_amplificacion = base.copy()
 
-        
         # ---------------------------------------------------------
         # 4.6) Mensajes de control (para neófitos)
         # ---------------------------------------------------------
@@ -1136,7 +1053,7 @@ if st.button("Buscar en X"):
         total_rt_puros = int(df_amplificacion["RT_puros_en_rango"].sum()) if (df_amplificacion is not None and not df_amplificacion.empty) else 0
         total_quotes = int(df_amplificacion["Quotes_en_rango"].sum()) if (df_amplificacion is not None and not df_amplificacion.empty) else 0
         total_ampl = int(df_amplificacion["Ampl_total"].sum()) if (df_amplificacion is not None and not df_amplificacion.empty) else 0
-        
+    
         likes_total_amp = int(df_amplificacion["Likesta"].sum()) if (df_amplificacion is not None and not df_amplificacion.empty) else 0
         
         # Interacción conversación (likes+RT de originales+quotes)
@@ -1272,8 +1189,8 @@ if st.button("Buscar en X"):
         
         # ✅ Mostrar fila de Amplificación SOLO si el usuario marcó RT puros
         if incl_retweets:
-            k4, k5, k6, k14, k8, k9 = st.columns(6)
-            k4.metric("Amplificación total", f"{total_ampl}")
+            k4, k5, k6, k14, k8, k9 = st.columns(6)            
+            k4.metric("Amplificación (RT puros)", f"{total_ampl}")
             k5.metric("Temp. amplificación", temp_amp)
             k6.metric("% Neg (amp)", f"{pct_neg_amp}%")
             k14.metric("% Pos (amp)", f"{pct_pos_amp}%")
