@@ -394,8 +394,22 @@ STOPWORDS = set([
 ])
             
 def limpiar_texto(texto):
-    palabras = re.findall(r"\b[a-záéíóúñ]+\b", (texto or "").lower())
+    # ✅ blindaje: si viene NaN/None/float, lo convertimos a ""
+    if texto is None:
+        texto = ""
+    try:
+        # pandas NaN es float y no tiene lower()
+        if isinstance(texto, float) and pd.isna(texto):
+            texto = ""
+    except Exception:
+        pass
+
+    if not isinstance(texto, str):
+        texto = str(texto)
+
+    palabras = re.findall(r"\b[a-záéíóúñ]+\b", texto.lower())
     return [p for p in palabras if p not in STOPWORDS and len(p) > 3]
+
 
 # --- Sentimiento simple (léxico)
 POSITIVAS = set([
@@ -1060,6 +1074,10 @@ if st.button("Buscar en X"):
             if "Texto_base_original" not in base.columns:
                 base["Texto_base_original"] = ""
             base["Texto_original"] = base["Texto_base_original"]
+            # ✅ Normalizar para que nunca llegue NaN / float
+            base["Texto_original"] = base["Texto_original"].fillna("")
+            base["Texto_original"] = base["Texto_original"].astype(str)
+
         
             # Autor original
             autor_por_original_id = {}
@@ -1185,12 +1203,26 @@ if st.button("Buscar en X"):
         #    - Conversación: df_conversacion.Texto
         #    - Amplificación: top textos originales amplificados (Texto_original)
         # -----------------------------
-        def top_terminos_de_textos(lista_textos: list[str], top_n: int = 15):
+
+        def top_terminos_de_textos(lista_textos: list, top_n: int = 15):
             all_words = []
             for t in (lista_textos or []):
+                if t is None:
+                    continue
+                # evitar NaN
+                try:
+                    if isinstance(t, float) and pd.isna(t):
+                        continue
+                except Exception:
+                    pass
                 all_words.extend(limpiar_texto(t))
+        
+            if not all_words:
+                return pd.Series(dtype=int), []
+        
             s = pd.Series(all_words).value_counts().head(top_n)
             return s, s.index.tolist()
+
         
         # Conversación
         if df_conversacion is not None and not df_conversacion.empty:
