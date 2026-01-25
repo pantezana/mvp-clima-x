@@ -1403,18 +1403,18 @@ if st.button("Buscar en X"):
                 st.info("Sin datos de sentimiento en conversación.")
         
         with colB:
-        # ✅ Donut de amplificación SOLO si el usuario marcó RT puros
-        if incl_retweets and (df_amplificacion is not None) and (not df_amplificacion.empty):
-            tmp = df_amplificacion.copy()
-            tmp["peso"] = pd.to_numeric(tmp["RT_puros_en_rango"], errors="coerce").fillna(0) + \
-                          pd.to_numeric(tmp["Quotes_en_rango"], errors="coerce").fillna(0)
-            sent_w = tmp.groupby("Sentimiento_dominante")["peso"].sum().reset_index()
-            sent_w.columns = ["Sentimiento", "Peso"]
-            fig_sent_amp = px.pie(sent_w, names="Sentimiento", values="Peso", hole=0.45,
-                                  title="🧁 Sentimiento — Amplificación (ponderado)")
-            st.plotly_chart(fig_sent_amp, use_container_width=True)
-        else:
-            st.info("Gráfico de amplificación oculto: no está seleccionado 'RT puros'.")
+            # ✅ Donut de amplificación SOLO si el usuario marcó RT puros
+            if incl_retweets and (df_amplificacion is not None) and (not df_amplificacion.empty):
+                tmp = df_amplificacion.copy()
+                tmp["peso"] = pd.to_numeric(tmp["RT_puros_en_rango"], errors="coerce").fillna(0) + \
+                              pd.to_numeric(tmp["Quotes_en_rango"], errors="coerce").fillna(0)
+                sent_w = tmp.groupby("Sentimiento_dominante")["peso"].sum().reset_index()
+                sent_w.columns = ["Sentimiento", "Peso"]
+                fig_sent_amp = px.pie(sent_w, names="Sentimiento", values="Peso", hole=0.45,
+                                      title="🧁 Sentimiento — Amplificación (ponderado)")
+                st.plotly_chart(fig_sent_amp, use_container_width=True)
+            else:
+                st.info("Gráfico de amplificación oculto: no está seleccionado 'RT puros'.")
 
         
         # --- 9.3 Sentimiento por día (solo conversación, porque RT puros no deben duplicar)
