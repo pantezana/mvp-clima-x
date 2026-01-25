@@ -707,6 +707,11 @@ if st.button("Buscar en X"):
         if df_raw.empty:
             st.warning("No se encontraron publicaciones para ese criterio o rango seleccionado.")
             st.stop()
+
+        df_raw["Fecha"] = pd.to_datetime(df_raw["Fecha"], errors="coerce")
+        df_raw["Likes"] = pd.to_numeric(df_raw["Likes"], errors="coerce").fillna(0)
+        df_raw["Retweets"] = pd.to_numeric(df_raw["Retweets"], errors="coerce").fillna(0)
+        df_raw["Interacción"] = df_raw["Likes"] + df_raw["Retweets"]
         
         # 3) Filtramos según los checks del usuario (sin hacer nueva consulta)
         tipos_permitidos = set()
@@ -1226,10 +1231,21 @@ if st.button("Buscar en X"):
         
         # Top autor (en conversación por interacción)
         if df_conversacion is not None and not df_conversacion.empty:
+            # ✅ Si por alguna razón Interacción no existe, la creamos al vuelo
+            if "Interacción" not in df_conversacion.columns:
+                if ("Likes" in df_conversacion.columns) and ("Retweets" in df_conversacion.columns):
+                    df_conversacion["Interacción"] = (
+                        pd.to_numeric(df_conversacion["Likes"], errors="coerce").fillna(0) +
+                        pd.to_numeric(df_conversacion["Retweets"], errors="coerce").fillna(0)
+                    )
+                else:
+                    df_conversacion["Interacción"] = 0
+        
             top_row = df_conversacion.sort_values("Interacción", ascending=False).head(1)
             top_autor = str(top_row.iloc[0].get("Autor", "N/A")) if len(top_row) else "N/A"
         else:
-            top_autor = "N/A"
+           top_autor = "N/A"
+
         
         # -----------------------------
         # 6) Mostrar KPIs (separados)
