@@ -1530,50 +1530,48 @@ if st.button("Buscar en X"):
         #   - Si incl_originales: muestra Originales
         #   - Si NO incl_originales y sí incl_quotes: muestra Quotes
         #   - Si ninguno: no muestra conversación
+        #     Conversación = Originales + Quotes
         # ------------------------------------------------------------
         
         # 1) Definir cuál dataframe se mostrará como "conversación"
+           
         df_conv_base = pd.DataFrame()
         titulo_top = ""
         titulo_all = ""
+        
         cols_conv = [
+            "tipo",  # 👈 útil para ver si es Original o Quote
             "Autor", "Fecha", "Likes", "Retweets", "Interacción",
             "Sentimiento", "Ubicación inferida", "Confianza",
             "Texto", "Link"
         ]
         
-        if incl_originales:
-            # ---- Conversación = Originales ----
-            df_conv_base = df_originales.copy()
-            titulo_top = "1) 🔥 Top 10 — Posts originales (no RT)"
-            titulo_all = "2) 📄 Ver TODOS los posts originales (no RT)"
+        # ✅ Si hay conversación calculada (originales + quotes), usamos esa como fuente
+        if df_conversacion is not None and (not df_conversacion.empty):
+            df_conv_base = df_conversacion.copy()
         
-        elif (not incl_originales) and incl_quotes:
-            # ---- Conversación = Quotes ----
-            df_conv_base = df_quotes.copy()
-            titulo_top = "1) 🔥 Top 10 — Retweets con cita (Quotes)"
-            titulo_all = "2) 📄 Ver TODOS los retweets con cita (Quotes)"
-        
+            # Títulos dinámicos según selección
+            if incl_originales and incl_quotes:
+                titulo_top = "1) 🔥 Top 10 — Conversación (Originales + Quotes)"
+                titulo_all = "2) 📄 Ver TODA la conversación (Originales + Quotes)"
+            elif incl_originales and (not incl_quotes):
+                titulo_top = "1) 🔥 Top 10 — Posts originales (no RT)"
+                titulo_all = "2) 📄 Ver TODOS los posts originales (no RT)"
+            elif (not incl_originales) and incl_quotes:
+                titulo_top = "1) 🔥 Top 10 — Retweets con cita (Quotes)"
+                titulo_all = "2) 📄 Ver TODOS los retweets con cita (Quotes)"
         else:
-            df_conv_base = pd.DataFrame()  # no hay conversación seleccionada
+            df_conv_base = pd.DataFrame()
         
-        # 2) Renderizar si hay algo que mostrar
+        # Renderizar
         if df_conv_base is None or df_conv_base.empty:
-            st.info("No se muestran tablas de 'Conversación' porque no está seleccionado 'Posts originales' ni 'Quotes', o no hay datos en el rango.")
+            st.info("No se muestran tablas de 'Conversación' porque no hay datos (Originales/Quotes) con los filtros actuales.")
         else:
-            # Rank por Interacción
+            # ✅ Rank por Interacción (si existe)
             if "Interacción" in df_conv_base.columns:
                 df_conv_rank = df_conv_base.sort_values("Interacción", ascending=False).copy()
             else:
                 df_conv_rank = df_conv_base.copy()
-        
-            # Asegurar Sentimiento (si no existe en este df, mapearlo desde df_conversacion)
-            if "Sentimiento" not in df_conv_rank.columns:
-                if df_conversacion is not None and (not df_conversacion.empty) and "tweet_id" in df_conv_rank.columns:
-                    sent_map = df_conversacion.set_index("tweet_id")["Sentimiento"].to_dict()
-                    df_conv_rank["Sentimiento"] = df_conv_rank["tweet_id"].map(sent_map)
-                else:
-                    df_conv_rank["Sentimiento"] = None
         
             # TABLA 1) TOP 10
             render_table(
@@ -1590,8 +1588,7 @@ if st.button("Buscar en X"):
                     titulo_all,
                     cols=cols_conv,
                     top=None
-                )
-        
+                )        
         # ------------------------------------------------------------
         # TABLA 3) TOP 10 — Amplificación (muestra el TWEET ORIGINAL)
         # Ranking: Ampl_total (RT puros + Quotes) en el rango
