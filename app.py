@@ -791,6 +791,7 @@ if st.button("Buscar en X"):
         hay_conversacion = not df_conversacion.empty
         hay_rt_puros = not df_rt_puros.empty
         
+        
         if (not hay_conversacion) and (not hay_rt_puros):
             st.warning("No se encontraron publicaciones para los filtros y rango seleccionados.")
             st.stop()
@@ -917,8 +918,11 @@ if st.button("Buscar en X"):
         #     Nota: aquí además guardamos Ubicación/Confianza como “dominante” (modo)
         # ---------------------------------------------------------
         df_amplificacion = pd.DataFrame()
+
+        # ✅ REGLA: Solo construimos amplificación si el usuario marcó "RT puros"
+        # (si solo eligió Quotes, NO debe salir el panel/gráfico de amplificación)
+        if incl_retweets and ((not df_rt_agregado.empty) or (not df_quotes_agregado.empty)):
         
-        if (not df_rt_agregado.empty) or (not df_quotes_agregado.empty):
             # Base = unión por original_id
             base = df_rt_agregado.copy()
             if base.empty:
@@ -943,53 +947,39 @@ if st.button("Buscar en X"):
             base["Ampl_total"] = base["RT_puros_en_rango"] + base["Quotes_en_rango"]
         
             # Fecha última amplificación (recomendado)
-            # - Preferimos max entre (Fecha_ultima_amplificacion, Fecha_ultima_quote)
- 
             if "Fecha_ultima_amplificacion" in base.columns:
                 base["Fecha_ultima_amplificacion"] = pd.to_datetime(base["Fecha_ultima_amplificacion"], errors="coerce")
             else:
                 base["Fecha_ultima_amplificacion"] = pd.NaT
-            
+        
             if "Fecha_ultima_quote" in base.columns:
                 base["Fecha_ultima_quote"] = pd.to_datetime(base["Fecha_ultima_quote"], errors="coerce")
             else:
                 base["Fecha_ultima_quote"] = pd.NaT
-            
-            # 1) Aseguramos datetime
+        
             f1 = pd.to_datetime(base["Fecha_ultima_amplificacion"], errors="coerce", utc=True)
             f2 = pd.to_datetime(base["Fecha_ultima_quote"], errors="coerce", utc=True)
-            
-            # 2) Quitamos la zona horaria (dejamos "naive") para poder comparar sin error
+        
             f1 = f1.dt.tz_convert(None)
             f2 = f2.dt.tz_convert(None)
-            
-            # 3) Elegimos la más reciente entre ambas
+        
             base["Fechaua"] = f1.where(f1 >= f2, f2)
             base["Fechaua"] = base["Fechaua"].fillna(f1).fillna(f2)
-
-            st.write("Tipos:", base["Fecha_ultima_amplificacion"].dtype, base["Fecha_ultima_quote"].dtype)
-            
+        
+            # ✅ (Opcional) Quita este debug cuando ya funcione
+            # st.write("Tipos:", base["Fecha_ultima_amplificacion"].dtype, base["Fecha_ultima_quote"].dtype)
+        
             # Likes totales amplificación (RT + quote)
             base["Likesta"] = base["Likes_total_amplificacion"] + base["Likes_total_quotes"]
         
-            # Retweets totales amplificación (RT + quote) (métrica adicional)
+            # Retweets totales amplificación (RT + quote)
             base["Retweets"] = base["Retweets_total_amplificacion"] + base["Retweets_total_quotes"]
         
             # ---------------------------
             # Sentimiento dominante ponderado (RT_puros + quotes)
             # ---------------------------
-            # 1) Sentimiento del original (ya calculado 1 vez) -> viene de df_rt_agregado
-            # 2) Sentimiento de quotes: se calcula por fila en df_conversacion (quotes están ahí)
-            #
-            # Ponderación:
-            # - Peso RT = RT_puros_en_rango (todos repiten el mismo sentimiento del original)
-            # - Peso quotes = se usa sentimiento de cada quote y se suma 1 por quote
-            #
-            # Resultado: Sentimiento_dominante = el que tenga mayor peso total.
-            # Score_dominante: (peso_ganador / peso_total) aprox.
             sentiment_map = {}
         
-            # A) Contribución RT (sentimiento_original) con peso RT_puros_en_rango
             if not df_rt_agregado.empty:
                 for _, row in df_rt_agregado.iterrows():
                     oid = str(row.get("original_id"))
@@ -1001,9 +991,7 @@ if st.button("Buscar en X"):
                     if sent in sentiment_map[oid]:
                         sentiment_map[oid][sent] += w
         
-            # B) Contribución Quotes (cada quote suma 1 con su sentimiento)
             if not df_quotes.empty:
-                # Necesitamos el sentimiento de cada quote (ya está en df_conversacion; filtramos solo tipo Quote)
                 df_quotes_sent = df_conversacion[df_conversacion["tipo"] == "Quote"].copy()
                 if not df_quotes_sent.empty:
                     for _, r in df_quotes_sent.iterrows():
@@ -1013,9 +1001,8 @@ if st.button("Buscar en X"):
                             continue
                         sentiment_map.setdefault(oid, {"Positivo": 0.0, "Neutral": 0.0, "Negativo": 0.0})
                         if sent in sentiment_map[oid]:
-                            sentiment_map[oid][sent] += 1.0  # cada quote pesa 1
+                            sentiment_map[oid][sent] += 1.0
         
-            # Resolver dominante
             dominantes = []
             for _, row in base.iterrows():
                 oid = str(row.get("original_id"))
@@ -1032,9 +1019,8 @@ if st.button("Buscar en X"):
             base["Score_sent_dominante"] = [d[1] for d in dominantes]
         
             # ---------------------------
-            # Ubicación/Confianza “dominante” (modo) tomado de retweets+quotes
+            # Ubicación/Confianza dominante (modo)
             # ---------------------------
-            # Usamos TODAS las filas de df_raw donde original_id = X (RT o Quote)
             def modo_safe(series):
                 if series is None or len(series) == 0:
                     return None
@@ -1047,7 +1033,6 @@ if st.button("Buscar en X"):
                     return s.iloc[0]
         
             if not df_raw.empty:
-                # Tomamos solo amplificaciones (RT+Quote) para inferir ubicación del “público que amplifica”
                 amp_rows = df_raw[df_raw["tipo"].isin(["RT", "Quote"]) & df_raw["original_id"].notna()].copy()
         
                 ubis = []
@@ -1060,41 +1045,33 @@ if st.button("Buscar en X"):
                 base["Ubicación_dominante"] = ubis
                 base["Confianza_dominante"] = confs
         
-            # ---------------------------
-            # Link “Abrir” al tweet original:
-            # - Si el original está en df_originales: usamos su URL (ideal)
-            # - Si no: construimos URL genérica por id (X igual abre por id si existe)
-            # ---------------------------
+            # URL original
             url_por_original_id = {}
             if not df_originales.empty:
                 for _id, _url in zip(df_originales["tweet_id"].tolist(), df_originales["URL"].tolist()):
                     if _id:
                         url_por_original_id[str(_id)] = _url
         
-            base["URL_original"] = base["original_id"].astype(str).apply(lambda oid: url_por_original_id.get(oid, f"https://x.com/i/web/status/{oid}"))
-      
-            # Texto del original:
-            # - Si lo tenemos en df_rt_agregado (Texto_base_original), úsalo
-            # - Si no, vacío
+            base["URL_original"] = base["original_id"].astype(str).apply(
+                lambda oid: url_por_original_id.get(oid, f"https://x.com/i/web/status/{oid}")
+            )
+        
+            # Texto del original
             if "Texto_base_original" not in base.columns:
                 base["Texto_base_original"] = ""
-
             base["Texto_original"] = base["Texto_base_original"]
-
-            # ---------------------------------------------------------
-            # MAPA: original_id → Autor del tweet original
-            # ---------------------------------------------------------
+        
+            # Autor original
             autor_por_original_id = {}
-            
             if not df_originales.empty:
                 for tid, autor in zip(df_originales["tweet_id"], df_originales["Autor"]):
                     if tid:
                         autor_por_original_id[str(tid)] = autor
-
-            # Autor del tweet ORIGINAL
+        
             base["Autor"] = base["original_id"].astype(str).apply(lambda oid: autor_por_original_id.get(oid, "Desconocido"))
-
+        
             df_amplificacion = base.copy()
+
         
         # ---------------------------------------------------------
         # 4.6) Mensajes de control (para neófitos)
@@ -1185,8 +1162,11 @@ if st.button("Buscar en X"):
         
             return round(pos/total_peso*100, 1), round(neu/total_peso*100, 1), round(neg/total_peso*100, 1)
         
-        pct_pos_amp, pct_neu_amp, pct_neg_amp = distribucion_amp_ponderada(df_amplificacion)
-        
+        if incl_retweets:
+            pct_pos_amp, pct_neu_amp, pct_neg_amp = distribucion_amp_ponderada(df_amplificacion)
+        else:
+            pct_pos_amp, pct_neu_amp, pct_neg_amp = 0.0, 0.0, 0.0
+
         # -----------------------------
         # 4) Temperatura (dos semáforos)
         # -----------------------------
@@ -1258,14 +1238,18 @@ if st.button("Buscar en X"):
         k10.metric("Interacción (conv)", f"{interaccion_conversacion}")
         k12.metric("Narrativa #1 (conv)", narrativa_conv_1)
         
-        k4, k5, k6, k14, k8, k9 = st.columns(6)
-        k4.metric("Amplificación total", f"{total_ampl}")
-        k5.metric("Temp. amplificación", temp_amp)
-        k6.metric("% Neg (amp)", f"{pct_neg_amp}%")
-        k14.metric("% Pos (amp)", f"{pct_pos_amp}%")
-        k8.metric("Quotes", f"{n_quotes}")
-        k9.metric("RT puros", f"{n_rt_puros}")
-    
+        # ✅ Mostrar fila de Amplificación SOLO si el usuario marcó RT puros
+        if incl_retweets:
+            k4, k5, k6, k14, k8, k9 = st.columns(6)
+            k4.metric("Amplificación total", f"{total_ampl}")
+            k5.metric("Temp. amplificación", temp_amp)
+            k6.metric("% Neg (amp)", f"{pct_neg_amp}%")
+            k14.metric("% Pos (amp)", f"{pct_pos_amp}%")
+            k8.metric("Quotes", f"{n_quotes}")
+            k9.metric("RT puros", f"{n_rt_puros}")
+        else:
+            st.info("Amplificación oculta: no está seleccionado 'RT puros'.")
+
         st.caption(
             f"Conv: Pos {pct_pos_conv}% | Neu {pct_neu_conv}% | Neg {pct_neg_conv}% — "
             f"Amp (ponderado): Pos {pct_pos_amp}% | Neu {pct_neu_amp}% | Neg {pct_neg_amp}%."
@@ -1419,16 +1403,19 @@ if st.button("Buscar en X"):
                 st.info("Sin datos de sentimiento en conversación.")
         
         with colB:
-            if df_amplificacion is not None and not df_amplificacion.empty:
-                # armamos una tabla con pesos para el donut
-                tmp = df_amplificacion.copy()
-                tmp["peso"] = pd.to_numeric(tmp["RT_puros_en_rango"], errors="coerce").fillna(0) + pd.to_numeric(tmp["Quotes_en_rango"], errors="coerce").fillna(0)
-                sent_w = tmp.groupby("Sentimiento_dominante")["peso"].sum().reset_index()
-                sent_w.columns = ["Sentimiento", "Peso"]
-                fig_sent_amp = px.pie(sent_w, names="Sentimiento", values="Peso", hole=0.45, title="🧁 Sentimiento — Amplificación (ponderado)")
-                st.plotly_chart(fig_sent_amp, use_container_width=True)
-            else:
-                st.info("Sin datos de amplificación.")
+        # ✅ Donut de amplificación SOLO si el usuario marcó RT puros
+        if incl_retweets and (df_amplificacion is not None) and (not df_amplificacion.empty):
+            tmp = df_amplificacion.copy()
+            tmp["peso"] = pd.to_numeric(tmp["RT_puros_en_rango"], errors="coerce").fillna(0) + \
+                          pd.to_numeric(tmp["Quotes_en_rango"], errors="coerce").fillna(0)
+            sent_w = tmp.groupby("Sentimiento_dominante")["peso"].sum().reset_index()
+            sent_w.columns = ["Sentimiento", "Peso"]
+            fig_sent_amp = px.pie(sent_w, names="Sentimiento", values="Peso", hole=0.45,
+                                  title="🧁 Sentimiento — Amplificación (ponderado)")
+            st.plotly_chart(fig_sent_amp, use_container_width=True)
+        else:
+            st.info("Gráfico de amplificación oculto: no está seleccionado 'RT puros'.")
+
         
         # --- 9.3 Sentimiento por día (solo conversación, porque RT puros no deben duplicar)
         if df_conv_d is not None and not df_conv_d.empty and "Sentimiento" in df_conv_d.columns:
