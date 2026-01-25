@@ -47,10 +47,6 @@ if not (incluir_originales or incluir_retweets or incluir_quotes):
     st.warning("Selecciona al menos un tipo de contenido (Originales, RT puros o Quotes).")
 
 # Nota de uso (educativa)
-st.caption(
-    "Tip: Si eliges solo 'Posts originales', tu análisis no se llenará de retweets repetidos. "
-    "Si incluyes RT/Quotes, verás también 'Amplificación' (qué post se está difundiendo)."
-)
 
 def build_x_query(base_query: str, incluir_originales: bool, incluir_retweets: bool, incluir_quotes: bool) -> str:
     """
@@ -832,9 +828,7 @@ if st.button("Buscar en X"):
         # Pega este bloque JUSTO DESPUÉS de tu:
         #   st.markdown("## 🧠 ANALISIS Y RESULTADOS")
         # y ANTES de cualquier lógica vieja que use "df" (ya NO usamos df).
-        
-        st.markdown("### 🙂 Sentimiento (sin duplicar por retweets)")
-        
+            
         # ---------------------------------------------------------
         # 4.1) Definir “conversación”:
         # - Conversación incluye: originales + quotes (porque quotes sí aportan comentario nuevo)
@@ -1071,14 +1065,10 @@ if st.button("Buscar en X"):
         # ---------------------------------------------------------
         # 4.6) Mensajes de control (para neófitos)
         # ---------------------------------------------------------
-        st.caption(
-            f"Sentimiento conversación calculado en {len(df_conversacion)} fila(s) (Originales + Quotes). "
-            f"RT puros se agregan por tweet original para NO inflar el sentimiento."
-        )
         
         st.caption(
             f"Método de sentimiento (conversación): {metodo_sent_conv}. "
-            f"En amplificación: dominante ponderado por (RT_puros + Quotes)."
+            f"En amplificación: dominante por (RT_puros)."
         )
         
         # Guardamos dfs clave para PARTE 5/6 (KPIs + tablas + gráficos)
