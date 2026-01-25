@@ -727,7 +727,20 @@ if st.button("Buscar en X"):
         df_originales = df_raw[df_raw["tipo"] == "Original"].copy()
         df_rt_puros   = df_raw[df_raw["tipo"] == "RT"].copy()
         df_quotes     = df_raw[df_raw["tipo"] == "Quote"].copy()
+
+        # Conversación vista según checks:
+        df_conversacion_view = pd.DataFrame()
         
+        if incl_originales and incl_quotes:
+            df_conversacion_view = pd.concat([df_originales, df_quotes], ignore_index=True)
+        elif incl_originales and (not incl_quotes):
+            df_conversacion_view = df_originales.copy()
+        elif (not incl_originales) and incl_quotes:
+            df_conversacion_view = df_quotes.copy()
+        else:
+            # si no está originales ni quotes, entonces conversación no aplica
+            df_conversacion_view = pd.DataFrame()
+
         # Tip: para depurar rápido
         st.session_state["df_raw_rows"] = int(len(df_raw))
         st.session_state["df_originales_rows"] = int(len(df_originales))
@@ -767,30 +780,40 @@ if st.button("Buscar en X"):
         # - Conversación incluye: originales + quotes (porque quotes sí aportan comentario nuevo)
         # - RT puros NO entran a conversación (son amplificación pura y repiten texto)
         # ---------------------------------------------------------
-        df_conversacion = pd.concat([df_originales, df_quotes], ignore_index=True)
+ 
+        df_conversacion = df_conversacion_view.copy()
+
+        hay_conversacion = not df_conversacion.empty
+        hay_rt_puros = not df_rt_puros.empty
         
-        if df_conversacion.empty:
-            st.warning("No hay 'conversación' (originales + quotes) en el rango seleccionado.")
+        if (not hay_conversacion) and (not hay_rt_puros):
+            st.warning("No se encontraron publicaciones para los filtros y rango seleccionados.")
             st.stop()
+        
+        if not hay_conversacion:
+            st.info("No hay 'conversación' (originales + quotes) en el rango seleccionado. Se mostrará solo Amplificación (RT puros).")
         
         # ---------------------------------------------------------
         # 4.2) Sentimiento por fila SOLO en conversación (originales + quotes)
         #     (acá sí tiene sentido por fila porque el texto cambia)
         # ---------------------------------------------------------
-        sent_hf_conv = []
-        score_hf_conv = []
-        
-        for txt in df_conversacion["Texto"].tolist():
-            s, sc = sentimiento_hf(txt)
-            sent_hf_conv.append(s)
-            score_hf_conv.append(sc)
-        
-        df_conversacion["Sentimiento_HF"] = sent_hf_conv
-        df_conversacion["Score_HF"] = score_hf_conv
-        df_conversacion["Sentimiento_Lex"] = df_conversacion["Texto"].apply(calcular_sentimiento)
-        df_conversacion["Sentimiento"] = df_conversacion["Sentimiento_HF"].fillna(df_conversacion["Sentimiento_Lex"])
-        
-        metodo_sent_conv = "IA (Hugging Face)" if df_conversacion["Sentimiento_HF"].notna().any() else "Léxico (fallback)"
+        if hay_conversacion:
+            sent_hf_conv = []
+            score_hf_conv = []
+            
+            for txt in df_conversacion["Texto"].tolist():
+                s, sc = sentimiento_hf(txt)
+                sent_hf_conv.append(s)
+                score_hf_conv.append(sc)
+            
+            df_conversacion["Sentimiento_HF"] = sent_hf_conv
+            df_conversacion["Score_HF"] = score_hf_conv
+            df_conversacion["Sentimiento_Lex"] = df_conversacion["Texto"].apply(calcular_sentimiento)
+            df_conversacion["Sentimiento"] = df_conversacion["Sentimiento_HF"].fillna(df_conversacion["Sentimiento_Lex"])
+            
+            metodo_sent_conv = "IA (Hugging Face)" if df_conversacion["Sentimiento_HF"].notna().any() else "Léxico (fallback)"
+        else:
+            metodo_sent_conv = "N/A (sin conversación)"
         
         # ---------------------------------------------------------
         # 4.3) Sentimiento para RT puros:
@@ -1467,84 +1490,114 @@ if st.button("Buscar en X"):
             )
         
         # ------------------------------------------------------------
-        # TABLA 1) TOP 10 — Tweets originales (no RT) dentro del rango
-        # Ranking sugerido: Interacción = Likes + Retweets (del original)
         # ------------------------------------------------------------
-        if not df_originales.empty:
-            df_originales_rank = df_originales.sort_values("Interacción", ascending=False).copy()
-        else:
-            df_originales_rank = df_originales.copy()
+        # TABLA 1 y 2 — "Conversación" según checks
+        #   - Si incl_originales: muestra Originales
+        #   - Si NO incl_originales y sí incl_quotes: muestra Quotes
+        #   - Si ninguno: no muestra conversación
+        # ------------------------------------------------------------
         
-        # Asegura URL para originales (ya la tienes como "URL" en PARTE 3)
-        # Columnas: igual que tus tablas actuales + Abrir
-        cols_top_originales = [
+        # 1) Definir cuál dataframe se mostrará como "conversación"
+        df_conv_base = pd.DataFrame()
+        titulo_top = ""
+        titulo_all = ""
+        cols_conv = [
             "Autor", "Fecha", "Likes", "Retweets", "Interacción",
             "Sentimiento", "Ubicación inferida", "Confianza",
             "Texto", "Link"
         ]
         
-        # Importante: df_originales puede no tener "Sentimiento" si en PARTE 4 solo lo calculaste en df_conversacion.
-        # En ese caso, lo traemos desde df_conversacion (que incluye originales).
-        if "Sentimiento" not in df_originales_rank.columns:
-            if not df_conversacion.empty:
-                sent_map = df_conversacion.set_index("tweet_id")["Sentimiento"].to_dict()
-                df_originales_rank["Sentimiento"] = df_originales_rank["tweet_id"].map(sent_map)
+        if incl_originales:
+            # ---- Conversación = Originales ----
+            df_conv_base = df_originales.copy()
+            titulo_top = "1) 🔥 Top 10 — Posts originales (no RT)"
+            titulo_all = "2) 📄 Ver TODOS los posts originales (no RT)"
         
-        render_table(
-            df_originales_rank,
-            "1) 🔥 Top 10 — Posts originales (no RT)",
-            cols=cols_top_originales,
-            top=10
-        )
+        elif (not incl_originales) and incl_quotes:
+            # ---- Conversación = Quotes ----
+            df_conv_base = df_quotes.copy()
+            titulo_top = "1) 🔥 Top 10 — Retweets con cita (Quotes)"
+            titulo_all = "2) 📄 Ver TODOS los retweets con cita (Quotes)"
         
-        # ------------------------------------------------------------
-        # TABLA 2) TODOS — Tweets originales (no RT) dentro del rango
-        # ------------------------------------------------------------
-        with st.expander("2) 📄 Ver TODOS los posts originales (no RT)"):
+        else:
+            df_conv_base = pd.DataFrame()  # no hay conversación seleccionada
+        
+        # 2) Renderizar si hay algo que mostrar
+        if df_conv_base is None or df_conv_base.empty:
+            st.info("No se muestran tablas de 'Conversación' porque no está seleccionado 'Posts originales' ni 'Quotes', o no hay datos en el rango.")
+        else:
+            # Rank por Interacción
+            if "Interacción" in df_conv_base.columns:
+                df_conv_rank = df_conv_base.sort_values("Interacción", ascending=False).copy()
+            else:
+                df_conv_rank = df_conv_base.copy()
+        
+            # Asegurar Sentimiento (si no existe en este df, mapearlo desde df_conversacion)
+            if "Sentimiento" not in df_conv_rank.columns:
+                if df_conversacion is not None and (not df_conversacion.empty) and "tweet_id" in df_conv_rank.columns:
+                    sent_map = df_conversacion.set_index("tweet_id")["Sentimiento"].to_dict()
+                    df_conv_rank["Sentimiento"] = df_conv_rank["tweet_id"].map(sent_map)
+                else:
+                    df_conv_rank["Sentimiento"] = None
+        
+            # TABLA 1) TOP 10
             render_table(
-                df_originales_rank,  # ya rankeado; si prefieres por fecha, cambia aquí
-                "2) 📄 Todos — Posts originales (no RT)",
-                cols=cols_top_originales,
-                top=None
+                df_conv_rank,
+                titulo_top,
+                cols=cols_conv,
+                top=10
             )
+        
+            # TABLA 2) TODOS
+            with st.expander(titulo_all):
+                render_table(
+                    df_conv_rank,
+                    titulo_all,
+                    cols=cols_conv,
+                    top=None
+                )
         
         # ------------------------------------------------------------
         # TABLA 3) TOP 10 — Amplificación (muestra el TWEET ORIGINAL)
         # Ranking: Ampl_total (RT puros + Quotes) en el rango
         # ------------------------------------------------------------
-        if not df_amplificacion.empty:
-            df_amp_rank = df_amplificacion.sort_values("Ampl_total", ascending=False).copy()
-        else:
-            df_amp_rank = df_amplificacion.copy()
         
-        cols_top_amp = [
-            "Autor",                     # 👈 NUEVA PRIMERA COLUMNA
-            "Fechaua",
-            "Ampl_total", "RT_puros_en_rango", "Quotes_en_rango",
-            "Likesta",
-            "Sentimiento_dominante",
-            "Ubicación_dominante", "Confianza_dominante",
-            "Texto_original",
-            "Link"
-        ]
-        
-        render_table(
-            df_amp_rank,
-            "3) 📣 Top 10 — Amplificación (muestra el tweet ORIGINAL amplificado)",
-            cols=cols_top_amp,
-            top=10
-        )
-        
-        # ------------------------------------------------------------
-        # TABLA 4) TODOS — Amplificación (muestra el TWEET ORIGINAL)
-        # ------------------------------------------------------------
-        with st.expander("4) 📄 Ver TODA la amplificación (tweet ORIGINAL agregado)"):
+        if incl_retweets:
+            if not df_amplificacion.empty:
+                df_amp_rank = df_amplificacion.sort_values("Ampl_total", ascending=False).copy()
+            else:
+                df_amp_rank = df_amplificacion.copy()
+            
+            cols_top_amp = [
+                "Autor",                     # 👈 NUEVA PRIMERA COLUMNA
+                "Fechaua",
+                "Ampl_total", "RT_puros_en_rango", "Quotes_en_rango",
+                "Likesta",
+                "Sentimiento_dominante",
+                "Ubicación_dominante", "Confianza_dominante",
+                "Texto_original",
+                "Link"
+            ]
+            
             render_table(
                 df_amp_rank,
-                "4) 📄 Toda la amplificación (tweet ORIGINAL agregado)",
+                "3) 📣 Top 10 — Amplificación (muestra el tweet ORIGINAL amplificado)",
                 cols=cols_top_amp,
-                top=None
+                top=10
             )
+            
+            # ------------------------------------------------------------
+            # TABLA 4) TODOS — Amplificación (muestra el TWEET ORIGINAL)
+            # ------------------------------------------------------------
+            with st.expander("4) 📄 Ver TODA la amplificación (tweet ORIGINAL agregado)"):
+                render_table(
+                    df_amp_rank,
+                    "4) 📄 Toda la amplificación (tweet ORIGINAL agregado)",
+                    cols=cols_top_amp,
+                    top=None
+                )
+        else:
+            st.info("No se muestra 'Amplificación' porque no está seleccionado 'RT puros'.")
         
         st.caption(
             "Nota: En Amplificación, se muestra el tweet ORIGINAL una sola vez por fila. "
