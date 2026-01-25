@@ -1051,7 +1051,7 @@ if st.button("Buscar en X"):
         
         # Totales de amplificación
         total_rt_puros = int(df_amplificacion["RT_puros_en_rango"].sum()) if (df_amplificacion is not None and not df_amplificacion.empty) else 0
-        total_quotes = int(df_amplificacion["Quotes_en_rango"].sum()) if (df_amplificacion is not None and not df_amplificacion.empty) else 0
+        total_quotes = int(len(df_quotes)) if (df_quotes is not None and not df_quotes.empty) else 0
         total_ampl = int(df_amplificacion["Ampl_total"].sum()) if (df_amplificacion is not None and not df_amplificacion.empty) else 0
     
         likes_total_amp = int(df_amplificacion["Likesta"].sum()) if (df_amplificacion is not None and not df_amplificacion.empty) else 0
@@ -1097,8 +1097,25 @@ if st.button("Buscar en X"):
         
             return round(pos/total_peso*100, 1), round(neu/total_peso*100, 1), round(neg/total_peso*100, 1)
         
-        if incl_retweets:
-            pct_pos_amp, pct_neu_amp, pct_neg_amp = distribucion_amp_ponderada(df_amplificacion)
+        def distribucion_amp_rt_only(df_amp: pd.DataFrame):
+            if df_amp is None or df_amp.empty:
+                return 0.0, 0.0, 0.0
+        
+            df_tmp = df_amp.copy()
+            df_tmp["peso"] = pd.to_numeric(df_tmp["RT_puros_en_rango"], errors="coerce").fillna(0)
+        
+            total_peso = float(df_tmp["peso"].sum())
+            if total_peso <= 0:
+                return 0.0, 0.0, 0.0
+        
+            pos = float(df_tmp.loc[df_tmp["Sentimiento_dominante"] == "Positivo", "peso"].sum())
+            neu = float(df_tmp.loc[df_tmp["Sentimiento_dominante"] == "Neutral", "peso"].sum())
+            neg = float(df_tmp.loc[df_tmp["Sentimiento_dominante"] == "Negativo", "peso"].sum())
+        
+            return round(pos/total_peso*100, 1), round(neu/total_peso*100, 1), round(neg/total_peso*100, 1)
+
+        if incl_retweets:            
+            pct_pos_amp, pct_neu_amp, pct_neg_amp = distribucion_amp_rt_only(df_amplificacion)
         else:
             pct_pos_amp, pct_neu_amp, pct_neg_amp = 0.0, 0.0, 0.0
 
@@ -1354,9 +1371,9 @@ if st.button("Buscar en X"):
         with colB:
             # ✅ Donut de amplificación SOLO si el usuario marcó RT puros
             if incl_retweets and (df_amplificacion is not None) and (not df_amplificacion.empty):
-                tmp = df_amplificacion.copy()
-                tmp["peso"] = pd.to_numeric(tmp["RT_puros_en_rango"], errors="coerce").fillna(0) + \
-                              pd.to_numeric(tmp["Quotes_en_rango"], errors="coerce").fillna(0)
+                tmp = df_amplificacion.copy()   
+                tmp["peso"] = pd.to_numeric(tmp["RT_puros_en_rango"], errors="coerce").fillna(0)
+
                 sent_w = tmp.groupby("Sentimiento_dominante")["peso"].sum().reset_index()
                 sent_w.columns = ["Sentimiento", "Peso"]
                 fig_sent_amp = px.pie(sent_w, names="Sentimiento", values="Peso", hole=0.45,
