@@ -1517,15 +1517,16 @@ if st.button("Buscar en X"):
             else:
                 df_amp_rank = df_amplificacion.copy()
             
-            cols_top_amp = [
-                "Autor",                     # 👈 NUEVA PRIMERA COLUMNA
-                "Fechaua",
-                "Ampl_total", "RT_puros_en_rango", "Quotes_en_rango",
-                "Likesta",
-                "Sentimiento_dominante",
-                "Ubicación_dominante", "Confianza_dominante",
-                "Texto_original",
-                "Link"
+            cols_top_amp = [           
+                 "Autor",
+                 "Fechaua",
+                 "Ampl_total",            # (ya es RT_puros_en_rango)
+                 "RT_puros_en_rango",
+                 "Likesta",
+                 "Sentimiento_dominante",
+                 "Ubicación_dominante", "Confianza_dominante",
+                 "Texto_original",
+                 "Link"
             ]
             
             render_table(
