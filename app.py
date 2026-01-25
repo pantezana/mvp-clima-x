@@ -384,6 +384,47 @@ def fetch_tweets_paginado(
 
     return tweets_all, users_by_id
 
+def fetch_originals_by_ids(client, original_ids: list[str]):
+    """
+    Devuelve un dict:
+      original_id -> {"autor": "@username", "url": "...", "texto": "..."}
+    """
+    original_ids = [str(x) for x in original_ids if x]
+    if not original_ids:
+        return {}
+
+    # Twitter v2 permite hasta 100 ids por llamada
+    ids_chunk = original_ids[:100]
+
+    resp = client.get_tweets(
+        ids=ids_chunk,
+        tweet_fields=["created_at", "public_metrics", "author_id"],
+        expansions=["author_id"],
+        user_fields=["username", "name"]
+    )
+
+    # Map de usuarios
+    users_by_id = {}
+    if resp and resp.includes and "users" in resp.includes:
+        for u in resp.includes["users"]:
+            users_by_id[str(u.id)] = u
+
+    out = {}
+    if resp and resp.data:
+        for tw in resp.data:
+            uid = str(getattr(tw, "author_id", ""))
+            u = users_by_id.get(uid)
+            username = getattr(u, "username", None) if u else None
+            autor = f"@{username}" if username else "Desconocido"
+            oid = str(getattr(tw, "id", ""))
+            out[oid] = {
+                "autor": autor,
+                "url": f"https://x.com/{username}/status/{oid}" if username else f"https://x.com/i/web/status/{oid}",
+                "texto": getattr(tw, "text", "") or ""
+            }
+    return out
+
+
 # --- Preparación de texto
             
 # Stopwords básicas en español (MVP)
@@ -990,18 +1031,37 @@ if st.button("Buscar en X"):
             base["URL_original"] = base["original_id"].astype(str).apply(
                 lambda oid: url_por_original_id.get(oid, f"https://x.com/i/web/status/{oid}")
             )
-        
-            # Texto del original (si no está en originales, usamos fallback del RT puro guardado)
+                
+            # Texto del original (fallback): si no podemos traer el original real, usamos el texto base del RT
             base["Texto_original"] = base.get("Texto_base_original", "").fillna("").astype(str)
-        
-            # Autor original (si no está en originales, queda desconocido, pero ya NO mezclarás quotes aquí)
-            autor_por_original_id = {}
-            if not df_originales.empty:
-                for tid, autor in zip(df_originales["tweet_id"], df_originales["Autor"]):
-                    if tid:
-                        autor_por_original_id[str(tid)] = autor
-        
-            base["Autor"] = base["original_id"].astype(str).apply(lambda oid: autor_por_original_id.get(oid, "Desconocido"))
+            
+            # --- Completar datos del tweet ORIGINAL real (autor, url, texto) ---
+            original_ids_list = base["original_id"].dropna().astype(str).unique().tolist()
+            originals_info = fetch_originals_by_ids(client, original_ids_list)
+            
+            # Autor original real
+            base["Autor"] = base["original_id"].astype(str).apply(
+                lambda oid: originals_info.get(oid, {}).get("autor", "Desconocido")
+            )
+            
+            # URL original real (mejor que el fallback i/web)
+            base["URL_original"] = base["original_id"].astype(str).apply(
+                lambda oid: originals_info.get(oid, {}).get("url", f"https://x.com/i/web/status/{oid}")
+            )
+            
+            # Texto original real (si se pudo traer, reemplaza el fallback)
+            base["Texto_original_real"] = base["original_id"].astype(str).apply(
+                lambda oid: originals_info.get(oid, {}).get("texto", "")
+            )
+            
+            base["Texto_original"] = base["Texto_original_real"].where(
+                base["Texto_original_real"].astype(str).str.len() > 0,
+                other=base["Texto_original"]
+            )
+            
+            # limpiamos auxiliar
+            base.drop(columns=["Texto_original_real"], inplace=True, errors="ignore")
+
         
             # ✅ muy importante: solo dejamos filas con RT>0
             base = base[base["Ampl_total"] > 0].copy()
