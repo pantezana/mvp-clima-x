@@ -2842,11 +2842,18 @@ if st.button("Buscar en X"):
             query=query,
             time_range=time_range,
         )
+        st.session_state["SKIP_PERSISTENT_RENDER_ONCE"] = True
 
 # ─────────────────────────────
 # Render persistente: si ya hay resultados, se muestran aunque cambies selects
 # ─────────────────────────────
 if st.session_state.get("HAS_RESULTS", False):
+
+    # ✅ Evita doble render en el MISMO run cuando vienes de "Buscar en X"
+    if st.session_state.get("SKIP_PERSISTENT_RENDER_ONCE", False):
+        st.session_state["SKIP_PERSISTENT_RENDER_ONCE"] = False
+        # No renderizamos nada persistente en este run para evitar duplicados
+        st.stop()
 
     df_conv_rank = st.session_state.get("DF_CONV_RANK", pd.DataFrame())
     df_amp_rank  = st.session_state.get("DF_AMP_RANK", pd.DataFrame())
