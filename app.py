@@ -2913,12 +2913,12 @@ if st.session_state.get("HAS_RESULTS", False):
 
     if df_conv_rank is not None and not df_conv_rank.empty:
         # TABLA 1) TOP 10
-        render_table(df_conv_rank, "1) 🔥 Top 10 — Conversación", cols=cols_conv, top=10)
+        render_table(df_conv_rank, "1) 🔥 Top 10 — Conversación R", cols=cols_conv, top=10)
     
         # UX replies TOP 10 (si aplica)
         incl_replies = st.session_state.get("incl_replies", False)
         if incl_replies and (df_replies is not None) and (not df_replies.empty):
-            st.markdown("#### 💬 Leer replies — TOP 10 (Conversación)")
+            st.markdown("#### 💬 Leer replies — TOP 10 (Conversación) R")
             df_conv_top10 = df_conv_rank.head(10).copy()
             render_replies_expanders_top10(
                 df_top10=df_conv_top10,
@@ -2931,7 +2931,7 @@ if st.session_state.get("HAS_RESULTS", False):
         # TABLA 2) VER TODO (EXPANDER)
         titulo_all_conv = st.session_state.get(
             "TITULO_ALL_CONV",
-            "2) 📄 Ver TODA la conversación"
+            "2) 📄 Ver TODA la conversación R"
         )
     
         with st.expander(titulo_all_conv):
@@ -2948,7 +2948,7 @@ if st.session_state.get("HAS_RESULTS", False):
         # TABLA 3) TOP 10
         render_table(
             df_amp_rank,
-            "3) 📣 Top 10 — Amplificación (muestra el tweet ORIGINAL amplificado)",
+            "3) 📣 Top 10 — Amplificación (muestra el tweet ORIGINAL amplificado R)",
             cols=cols_top_amp,
             top=10
         )
@@ -2956,7 +2956,7 @@ if st.session_state.get("HAS_RESULTS", False):
         # UX replies TOP 10 (si aplica)
         incl_replies = st.session_state.get("incl_replies", False)
         if incl_replies and (df_replies is not None) and (not df_replies.empty):
-            st.markdown("#### 💬 Leer replies — TOP 10 (Amplificación)")
+            st.markdown("#### 💬 Leer replies — TOP 10 (Amplificación) R")
             df_amp_top10 = df_amp_rank.head(10).copy()
             render_replies_expanders_top10(
                 df_top10=df_amp_top10,
@@ -2969,7 +2969,7 @@ if st.session_state.get("HAS_RESULTS", False):
         # TABLA 4) VER TODO (EXPANDER)
         titulo_all_amp = st.session_state.get(
             "TITULO_ALL_AMP",
-            "4) 📄 Ver TODA la amplificación (tweet ORIGINAL agregado)"
+            "4) 📄 Ver TODA la amplificación (tweet ORIGINAL agregado) R"
         )
     
         with st.expander(titulo_all_amp):
