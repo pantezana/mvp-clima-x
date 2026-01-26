@@ -6,6 +6,15 @@ import requests
 import time
 import plotly.express as px
 import json
+import io
+from reportlab.lib.pagesizes import A4, landscape
+from reportlab.platypus import (
+    SimpleDocTemplate, Paragraph, Spacer, PageBreak, Image, Table, TableStyle, LongTable
+)
+from reportlab.lib.styles import getSampleStyleSheet, ParagraphStyle
+from reportlab.lib import colors
+from reportlab.lib.units import cm
+from reportlab.lib.enums import TA_LEFT, TA_CENTER
 from datetime import datetime, timedelta
 
 st.set_page_config(page_title="MVP Clima en X", layout="wide")
@@ -861,6 +870,482 @@ def render_table(df_show: pd.DataFrame, title: str, cols: list[str], top: int | 
         _df[cols].to_html(escape=False, index=False),
         unsafe_allow_html=True
     )
+
+def _safe_str(x):
+    if x is None:
+        return ""
+    try:
+        if isinstance(x, float) and pd.isna(x):
+            return ""
+    except Exception:
+        pass
+    return str(x)
+
+def _strip_html(s: str) -> str:
+    # Para convertir el HTML "<a ...>Abrir</a>" a texto "Abrir: URL"
+    if not isinstance(s, str) or not s:
+        return ""
+    # extraer href si existe
+    m = re.search(r'href="([^"]+)"', s)
+    if m:
+        return m.group(1)
+    return re.sub(r"<[^>]+>", "", s).strip()
+
+def _df_prepare_for_pdf(df: pd.DataFrame, cols: list[str], mode: str, max_text_chars: int = 280):
+    """
+    Prepara DF para PDF:
+    - respeta cols
+    - convierte fechas
+    - convierte Link/URL html a URL
+    - trunca Texto para evitar tablas inleíbles
+    """
+    if df is None or df.empty:
+        return pd.DataFrame(columns=cols)
+
+    d = df.copy()
+
+    # asegurar columnas
+    for c in cols:
+        if c not in d.columns:
+            d[c] = ""
+
+    # Normalizar fechas típicas
+    for c in ["Fecha", "Fechaua"]:
+        if c in d.columns:
+            d[c] = pd.to_datetime(d[c], errors="coerce")
+            d[c] = d[c].dt.strftime("%Y-%m-%d %H:%M:%S").fillna("")
+
+    # Link: si viene HTML, lo convertimos a URL
+    if "Link" in cols and "Link" in d.columns:
+        d["Link"] = d["Link"].apply(_strip_html)
+
+    # Texto largo: truncar en Ejecutivo, menos truncado en Completo (igual conviene algo)
+    if "Texto" in d.columns:
+        lim = max_text_chars if mode == "EJECUTIVO" else max(500, max_text_chars)
+        d["Texto"] = d["Texto"].apply(lambda t: (_safe_str(t)[:lim] + "…") if len(_safe_str(t)) > lim else _safe_str(t))
+
+    if "Texto_original" in d.columns:
+        lim = max_text_chars if mode == "EJECUTIVO" else max(500, max_text_chars)
+        d["Texto_original"] = d["Texto_original"].apply(lambda t: (_safe_str(t)[:lim] + "…") if len(_safe_str(t)) > lim else _safe_str(t))
+
+    return d[cols].copy()
+
+def _plotly_to_png_bytes(fig, width=1200, height=650, scale=2):
+    """
+    Convierte plotly fig a PNG (bytes) usando kaleido.
+    """
+    try:
+        return fig.to_image(format="png", width=width, height=height, scale=scale)
+    except Exception:
+        return None
+
+def _make_styles():
+    styles = getSampleStyleSheet()
+    styles.add(ParagraphStyle(
+        name="H1",
+        parent=styles["Heading1"],
+        fontSize=16,
+        leading=18,
+        spaceAfter=10
+    ))
+    styles.add(ParagraphStyle(
+        name="H2",
+        parent=styles["Heading2"],
+        fontSize=12,
+        leading=14,
+        spaceBefore=8,
+        spaceAfter=6
+    ))
+    styles.add(ParagraphStyle(
+        name="Body",
+        parent=styles["BodyText"],
+        fontSize=9.5,
+        leading=12,
+        spaceAfter=6
+    ))
+    styles.add(ParagraphStyle(
+        name="Small",
+        parent=styles["BodyText"],
+        fontSize=8.2,
+        leading=10,
+        spaceAfter=4
+    ))
+    styles.add(ParagraphStyle(
+        name="CenterSmall",
+        parent=styles["BodyText"],
+        fontSize=8.2,
+        leading=10,
+        alignment=TA_CENTER,
+        spaceAfter=4
+    ))
+    return styles
+
+def _table_style_basic(repeat_header=True):
+    ts = TableStyle([
+        ("FONTNAME", (0, 0), (-1, 0), "Helvetica-Bold"),
+        ("FONTSIZE", (0, 0), (-1, 0), 8.5),
+        ("TEXTCOLOR", (0, 0), (-1, 0), colors.white),
+        ("BACKGROUND", (0, 0), (-1, 0), colors.HexColor("#2E7D32")),  # verde sobrio
+        ("ALIGN", (0, 0), (-1, 0), "LEFT"),
+        ("VALIGN", (0, 0), (-1, -1), "TOP"),
+        ("GRID", (0, 0), (-1, -1), 0.25, colors.grey),
+        ("FONTSIZE", (0, 1), (-1, -1), 7.8),
+        ("LEFTPADDING", (0, 0), (-1, -1), 4),
+        ("RIGHTPADDING", (0, 0), (-1, -1), 4),
+        ("TOPPADDING", (0, 0), (-1, -1), 3),
+        ("BOTTOMPADDING", (0, 0), (-1, -1), 3),
+    ])
+    # zebra
+    ts.add("ROWBACKGROUNDS", (0, 1), (-1, -1), [colors.whitesmoke, colors.lightgrey])
+    return ts
+
+def _df_to_longtable_story(df: pd.DataFrame, styles, title: str, col_widths=None):
+    """
+    Convierte dataframe a LongTable con encabezado repetido.
+    Usa Paragraph para wrap.
+    """
+    story = []
+    story.append(Paragraph(title, styles["H2"]))
+    if df is None or df.empty:
+        story.append(Paragraph("Sin datos.", styles["Body"]))
+        return story
+
+    # Convertimos celdas a Paragraph para wrap
+    data = [list(df.columns)]
+    for _, row in df.iterrows():
+        r = []
+        for c in df.columns:
+            txt = _safe_str(row[c])
+            # links como clickable (si parece url)
+            if isinstance(txt, str) and txt.startswith("http"):
+                txt = f'<link href="{txt}">Abrir</link>'
+            r.append(Paragraph(txt.replace("\n", "<br/>"), styles["Small"]))
+        data.append(r)
+
+    tbl = LongTable(data, repeatRows=1, colWidths=col_widths)
+    tbl.setStyle(_table_style_basic())
+    story.append(tbl)
+    story.append(Spacer(1, 10))
+    return story
+
+def _add_png_to_story(png_bytes: bytes, styles, title: str, max_width=26*cm):
+    story = []
+    if not png_bytes:
+        return story
+    story.append(Paragraph(title, styles["H2"]))
+    img = Image(io.BytesIO(png_bytes))
+    # auto-scale (mantener proporción)
+    iw, ih = img.imageWidth, img.imageHeight
+    if iw > 0:
+        scale = min(1.0, float(max_width) / float(iw))
+        img.drawWidth = iw * scale
+        img.drawHeight = ih * scale
+    story.append(img)
+    story.append(Spacer(1, 12))
+    return story
+
+def build_report_payload_from_state(mode: str):
+    """
+    mode: 'EJECUTIVO' | 'COMPLETO'
+    Construye payload 100% desde session_state.
+    """
+    df_conv_rank = st.session_state.get("DF_CONV_RANK", pd.DataFrame())
+    df_amp_rank  = st.session_state.get("DF_AMP_RANK", pd.DataFrame())
+    df_replies   = st.session_state.get("DF_REPLIES", pd.DataFrame())
+
+    cols_conv    = st.session_state.get("COLS_CONV", [])
+    cols_top_amp = st.session_state.get("COLS_TOP_AMP", [])
+
+    meta = {
+        "query": st.session_state.get("query_final", st.session_state.get("query", "")) or st.session_state.get("query", ""),
+        "time_range": st.session_state.get("time_range", ""),
+        "generated_at": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
+        "incl_originales": st.session_state.get("incl_originales", True),
+        "incl_retweets": st.session_state.get("incl_retweets", True),
+        "incl_quotes": st.session_state.get("incl_quotes", True),
+        "incl_replies": st.session_state.get("incl_replies", False),
+    }
+
+    # KPIs/alertas/resumen/figs: los guardaremos en state con _save_results (ver punto 3)
+    kpis = st.session_state.get("REPORT_KPIS", {})
+    alertas = st.session_state.get("REPORT_ALERTAS", [])
+    resumen_md = st.session_state.get("REPORT_RESUMEN_MD", "")
+    nota_metodo = st.session_state.get("REPORT_NOTA_METODO", "")
+
+    figs = st.session_state.get("REPORT_FIGS", {})  # dict de png_bytes
+
+    # Límites por modo
+    if mode == "EJECUTIVO":
+        max_rows_all = 100
+        replies_per_thread = 20
+    else:
+        max_rows_all = None  # todo
+        replies_per_thread = 50
+
+    # Tablas
+    df_conv_top10 = df_conv_rank.head(10) if not df_conv_rank.empty else pd.DataFrame()
+    df_conv_all = df_conv_rank.head(max_rows_all) if (max_rows_all and not df_conv_rank.empty) else df_conv_rank
+
+    df_amp_top10 = df_amp_rank.head(10) if not df_amp_rank.empty else pd.DataFrame()
+    df_amp_all = df_amp_rank.head(max_rows_all) if (max_rows_all and not df_amp_rank.empty) else df_amp_rank
+
+    # Replies detalle: solo para top10 hilos (para no reventar PDF)
+    # Si quieres en COMPLETO: cambia 10 -> 20 en ambas líneas.
+    top_threads_conv = df_conv_top10["tweet_id"].astype(str).tolist() if ("tweet_id" in df_conv_top10.columns) else []
+    top_threads_amp  = df_amp_top10["original_id"].astype(str).tolist() if ("original_id" in df_amp_top10.columns) else []
+
+    return {
+        "mode": mode,
+        "meta": meta,
+        "kpis": kpis,
+        "alertas": alertas,
+        "resumen_md": resumen_md,
+        "nota_metodo": nota_metodo,
+        "figs": figs,
+        "tables": {
+            "conv_top10": _df_prepare_for_pdf(df_conv_top10, cols_conv, mode=mode),
+            "conv_all": _df_prepare_for_pdf(df_conv_all, cols_conv, mode=mode),
+            "amp_top10": _df_prepare_for_pdf(df_amp_top10, cols_top_amp, mode=mode),
+            "amp_all": _df_prepare_for_pdf(df_amp_all, cols_top_amp, mode=mode),
+            "cols_conv": cols_conv,
+            "cols_amp": cols_top_amp,
+        },
+        "replies": {
+            "df": df_replies.copy() if df_replies is not None else pd.DataFrame(),
+            "top_threads_conv": top_threads_conv,
+            "top_threads_amp": top_threads_amp,
+            "per_thread": replies_per_thread
+        }
+    }
+
+def generate_pdf_report(payload: dict) -> bytes:
+    styles = _make_styles()
+
+    buffer = io.BytesIO()
+    doc = SimpleDocTemplate(
+        buffer,
+        pagesize=landscape(A4),   # recomendado por tablas
+        leftMargin=1.3*cm,
+        rightMargin=1.3*cm,
+        topMargin=1.2*cm,
+        bottomMargin=1.0*cm
+    )
+
+    story = []
+
+    meta = payload["meta"]
+    mode = payload["mode"]
+
+    # ── Portada
+    story.append(Paragraph("Reporte de Clima en X", styles["H1"]))
+    story.append(Paragraph(f"<b>Modo:</b> {mode}", styles["Body"]))
+    story.append(Paragraph(f"<b>Query:</b> { _safe_str(meta.get('query')) }", styles["Body"]))
+    story.append(Paragraph(f"<b>Rango:</b> { _safe_str(meta.get('time_range')) }", styles["Body"]))
+    story.append(Paragraph(f"<b>Generado:</b> { _safe_str(meta.get('generated_at')) }", styles["Body"]))
+    story.append(Spacer(1, 10))
+
+    filtros = []
+    if meta.get("incl_originales"): filtros.append("Originales")
+    if meta.get("incl_quotes"): filtros.append("Quotes")
+    if meta.get("incl_retweets"): filtros.append("RT puros")
+    if meta.get("incl_replies"): filtros.append("Replies")
+    story.append(Paragraph(f"<b>Incluye:</b> {', '.join(filtros) if filtros else 'N/A'}", styles["Body"]))
+    story.append(Spacer(1, 14))
+
+    # ── Panel ejecutivo (KPIs)
+    kpis = payload.get("kpis", {}) or {}
+    if kpis:
+        story.append(Paragraph("Panel ejecutivo", styles["H2"]))
+        # tabla compacta KPIs (key-value)
+        kv = [["Indicador", "Valor"]]
+        for k, v in kpis.items():
+            kv.append([Paragraph(_safe_str(k), styles["Small"]), Paragraph(_safe_str(v), styles["Small"])])
+        t = Table(kv, repeatRows=1, colWidths=[10*cm, 16*cm])
+        t.setStyle(TableStyle([
+            ("BACKGROUND", (0,0), (-1,0), colors.HexColor("#1B5E20")),
+            ("TEXTCOLOR", (0,0), (-1,0), colors.white),
+            ("FONTNAME", (0,0), (-1,0), "Helvetica-Bold"),
+            ("GRID", (0,0), (-1,-1), 0.25, colors.grey),
+            ("ROWBACKGROUNDS", (0,1), (-1,-1), [colors.whitesmoke, colors.lightgrey]),
+            ("VALIGN", (0,0), (-1,-1), "TOP"),
+            ("FONTSIZE", (0,1), (-1,-1), 8),
+        ]))
+        story.append(t)
+        story.append(Spacer(1, 10))
+
+    # ── Alertas
+    alertas = payload.get("alertas", []) or []
+    story.append(Paragraph("Alertas", styles["H2"]))
+    if alertas:
+        for a in alertas:
+            story.append(Paragraph(_safe_str(a), styles["Body"]))
+    else:
+        story.append(Paragraph("Sin alertas fuertes con los umbrales actuales.", styles["Body"]))
+    story.append(Spacer(1, 10))
+
+    # ── Resumen ejecutivo (texto)
+    resumen_md = payload.get("resumen_md", "") or ""
+    story.append(Paragraph("Resumen ejecutivo", styles["H2"]))
+    if resumen_md:
+        # convertir markdown simple a párrafos (mínimo viable)
+        txt = resumen_md.replace("**", "")
+        for para in txt.split("\n\n"):
+            story.append(Paragraph(_safe_str(para).replace("\n", "<br/>"), styles["Body"]))
+    else:
+        story.append(Paragraph("No disponible.", styles["Body"]))
+    story.append(Spacer(1, 10))
+
+    # ── Nota metodológica
+    nota = payload.get("nota_metodo", "") or ""
+    if nota:
+        story.append(Paragraph("Nota metodológica", styles["H2"]))
+        story.append(Paragraph(_safe_str(nota).replace("\n", "<br/>"), styles["Small"]))
+        story.append(Spacer(1, 10))
+
+    story.append(PageBreak())
+
+    # ── Gráficos
+    figs = payload.get("figs", {}) or {}
+    if figs:
+        story.append(Paragraph("Tablero visual", styles["H1"]))
+        # orden recomendado
+        for key, title in [
+            ("fig_vol", "Volumen por día (Conversación vs RT puros)"),
+            ("fig_sent_conv", "Sentimiento — Conversación"),
+            ("fig_sent_amp", "Sentimiento — Amplificación (ponderado)"),
+            ("fig_terms_conv", "Top términos — Conversación"),
+            ("fig_terms_amp", "Top términos — Amplificación"),
+            ("fig_rep_conv", "Replies — Conversación (sentimiento)"),
+            ("fig_rep_amp", "Replies — Amplificación (sentimiento)"),
+        ]:
+            png = figs.get(key)
+            story += _add_png_to_story(png, styles, title)
+
+        story.append(PageBreak())
+
+    # ── Tablas 1–4 (CRÍTICO)
+    tables = payload["tables"]
+
+    # Anchos sugeridos (landscape A4 ~ 29.7cm ancho útil; aquí usamos 26cm aprox)
+    # Ajusta si cambias columnas.
+    def colwidths_for(cols):
+        # default: repartir
+        total_w = 26*cm
+        w = total_w / max(1, len(cols))
+        widths = [w]*len(cols)
+        # dar más a Texto/Texto_original
+        for i,c in enumerate(cols):
+            if c in ("Texto", "Texto_original"):
+                widths[i] = 9.0*cm
+            if c in ("Link",):
+                widths[i] = 2.4*cm
+            if c in ("Autor",):
+                widths[i] = 2.8*cm
+            if c in ("Ubicación inferida","Ubicación_dominante"):
+                widths[i] = 2.6*cm
+            if c in ("Confianza","Confianza_dominante"):
+                widths[i] = 1.7*cm
+        # normalizar para no pasarnos
+        s = sum(widths)
+        if s > total_w:
+            factor = total_w / s
+            widths = [x*factor for x in widths]
+        return widths
+
+    story.append(Paragraph("Resultados en tablas", styles["H1"]))
+
+    # Tabla 1
+    story += _df_to_longtable_story(
+        tables["conv_top10"],
+        styles,
+        "1) Top 10 — Conversación",
+        col_widths=colwidths_for(list(tables["conv_top10"].columns))
+    )
+
+    # Tabla 2
+    story += _df_to_longtable_story(
+        tables["conv_all"],
+        styles,
+        "2) Toda la conversación",
+        col_widths=colwidths_for(list(tables["conv_all"].columns))
+    )
+
+    story.append(PageBreak())
+
+    # Tabla 3
+    story += _df_to_longtable_story(
+        tables["amp_top10"],
+        styles,
+        "3) Top 10 — Amplificación (tweet original agregado)",
+        col_widths=colwidths_for(list(tables["amp_top10"].columns))
+    )
+
+    # Tabla 4
+    story += _df_to_longtable_story(
+        tables["amp_all"],
+        styles,
+        "4) Toda la amplificación (tweet original agregado)",
+        col_widths=colwidths_for(list(tables["amp_all"].columns))
+    )
+
+    # ── Replies detalle (si aplica)
+    rep_cfg = payload.get("replies", {})
+    df_replies = rep_cfg.get("df", pd.DataFrame())
+    incl_replies = meta.get("incl_replies", False)
+
+    if incl_replies and df_replies is not None and not df_replies.empty:
+        story.append(PageBreak())
+        story.append(Paragraph("Detalle de replies (comentarios)", styles["H1"]))
+        per_thread = int(rep_cfg.get("per_thread", 20))
+
+        def add_replies_section(scope: str, title: str, target_ids: list[str]):
+            nonlocal story
+            story.append(Paragraph(title, styles["H2"]))
+            # Orden sugerido: Negativos primero y recientes
+            dfr = df_replies[df_replies["scope"] == scope].copy()
+            if dfr.empty:
+                story.append(Paragraph("Sin replies para este scope.", styles["Body"]))
+                return
+
+            dfr["Fecha"] = pd.to_datetime(dfr["Fecha"], errors="coerce")
+            dfr["__srank"] = dfr["Sentimiento"].apply(_sent_rank_for_sort)
+            dfr = dfr.sort_values(["target_id", "__srank", "Fecha"], ascending=[True, True, False])
+
+            # por cada hilo objetivo
+            for tid in target_ids:
+                chunk = dfr[dfr["target_id"].astype(str) == str(tid)].copy()
+                if chunk.empty:
+                    continue
+                story.append(Paragraph(f"Hilo objetivo: {tid}", styles["Body"]))
+
+                # recortar a N por hilo
+                chunk = chunk.head(per_thread).copy()
+
+                # construir mini tabla replies
+                chunk["Link"] = chunk["reply_id"].astype(str).apply(lambda rid: f"https://x.com/i/web/status/{rid}")
+                cols = ["Fecha", "Sentimiento", "Likes", "Retweets", "Texto", "Link"]
+                chunk2 = chunk[cols].copy()
+                chunk2["Fecha"] = pd.to_datetime(chunk2["Fecha"], errors="coerce").dt.strftime("%Y-%m-%d %H:%M:%S").fillna("")
+                # truncado de texto
+                lim = 220 if mode == "EJECUTIVO" else 500
+                chunk2["Texto"] = chunk2["Texto"].apply(lambda t: (_safe_str(t)[:lim] + "…") if len(_safe_str(t)) > lim else _safe_str(t))
+
+                story += _df_to_longtable_story(
+                    chunk2,
+                    styles,
+                    f"Replies (top {per_thread})",
+                    col_widths=[4.0*cm, 2.3*cm, 1.6*cm, 1.8*cm, 12.0*cm, 4.0*cm]
+                )
+
+        add_replies_section("CONV", "Replies — Conversación (Top hilos)", rep_cfg.get("top_threads_conv", []))
+        story.append(PageBreak())
+        add_replies_section("AMP", "Replies — Amplificación (Top hilos)", rep_cfg.get("top_threads_amp", []))
+
+    # Construir PDF
+    doc.build(story)
+    pdf_bytes = buffer.getvalue()
+    buffer.close()
+    return pdf_bytes
 
 if st.button("Buscar en X"):
     now = time.time()
@@ -2288,6 +2773,54 @@ if st.button("Buscar en X"):
         )
 
         # ─────────────────────────────
+        # Preparar recursos para PDF (NO consume cuota)
+        # ─────────────────────────────
+        report_kpis = {
+            "Conversación (posts)": n_conversacion,
+            "Temp. conversación": temp_conv,
+            "% Neg (conv)": f"{pct_neg_conv}%",
+            "% Pos (conv)": f"{pct_pos_conv}%",
+            "Interacción (conv)": interaccion_conversacion,
+            "Narrativa #1 (conv)": narrativa_conv_1,
+            "Amplificación (RT puros)": total_ampl if incl_retweets else 0,
+            "Temp. amplificación": temp_amp if incl_retweets else "N/A",
+            "% Neg (amp)": f"{pct_neg_amp}%" if incl_retweets else "0%",
+            "% Pos (amp)": f"{pct_pos_amp}%" if incl_retweets else "0%",
+            "Likesta (amp)": likes_total_amp if incl_retweets else 0,
+            "Narrativa #1 (amp)": narrativa_amp_1 if incl_retweets else "N/A",
+        }
+        
+        if incl_replies:
+            report_kpis.update({
+                "Replies (conv)": replies_conv_total,
+                "Temp. replies (conv)": temp_replies_conv,
+                "% Neg (replies conv)": f"{pct_neg_replies_conv}%",
+                "Replies (amp)": replies_amp_total,
+                "Temp. replies (amp)": temp_replies_amp,
+                "% Neg (replies amp)": f"{pct_neg_replies_amp}%",
+            })
+        
+        report_nota = (
+            "Advertencia metodológica: señal temprana basada en publicaciones públicas de X; "
+            "sentimiento automatizado (IA/fallback) y ubicación inferida desde perfil/bio. "
+            "No representa a toda la población. "
+            "Quotes cuentan como conversación; RT puros solo amplificación."
+        )
+        
+        # Convertir figuras plotly a PNG (bytes) para meter en PDF
+        figs_png = {}
+        figs_png["fig_vol"] = _plotly_to_png_bytes(fig_vol) if "fig_vol" in locals() else None
+        figs_png["fig_sent_conv"] = _plotly_to_png_bytes(fig_sent_conv) if "fig_sent_conv" in locals() else None
+        figs_png["fig_sent_amp"] = _plotly_to_png_bytes(fig_sent_amp) if "fig_sent_amp" in locals() else None
+        figs_png["fig_terms_conv"] = _plotly_to_png_bytes(fig_terms) if "fig_terms" in locals() else None
+        figs_png["fig_terms_amp"] = _plotly_to_png_bytes(fig_terms2) if "fig_terms2" in locals() else None
+        figs_png["fig_rep_conv"] = _plotly_to_png_bytes(fig_rep_conv) if "fig_rep_conv" in locals() else None
+        figs_png["fig_rep_amp"] = _plotly_to_png_bytes(fig_rep_amp) if "fig_rep_amp" in locals() else None
+        
+        # Limpieza: eliminar Nones para ahorrar memoria
+        figs_png = {k:v for k,v in figs_png.items() if v}
+
+        # ─────────────────────────────
         # Guardar resultados en session_state (CLAVE para que no se borre al cambiar selects)
         # ─────────────────────────────
         _save_results(
@@ -2298,6 +2831,16 @@ if st.button("Buscar en X"):
             DF_REPLIES_AMP_AGG=df_replies_amp_agg if "df_replies_amp_agg" in locals() else pd.DataFrame(),
             COLS_CONV=cols_conv,
             COLS_TOP_AMP=cols_top_amp,
+
+            # ✅ NUEVO: para PDF
+            REPORT_KPIS=report_kpis,
+            REPORT_ALERTAS=alertas,
+            REPORT_RESUMEN_MD=bullets_ia if bullets_ia else "",
+            REPORT_NOTA_METODO=report_nota,
+            REPORT_FIGS=figs_png,
+            # (opcional: guardar query/time_range explícito)
+            query=query,
+            time_range=time_range,
         )
 
 # ─────────────────────────────
@@ -2314,6 +2857,42 @@ if st.session_state.get("HAS_RESULTS", False):
 
     cols_conv    = st.session_state.get("COLS_CONV", [])
     cols_top_amp = st.session_state.get("COLS_TOP_AMP", [])
+
+    # ✅ 1) DESCARGA PDF (primero, mejor UX)
+    st.markdown("## 📄 Descargar reporte PDF")
+
+    modo_pdf = st.selectbox(
+        "Tipo de PDF",
+        ["PDF Ejecutivo (recomendado)", "PDF Completo (100% literal)"],
+        index=0,
+        key="sel_modo_pdf"
+    )
+
+    colp1, colp2 = st.columns([1, 3])
+    with colp1:
+        if st.button("Generar PDF", key="btn_gen_pdf"):
+            mode = "EJECUTIVO" if "Ejecutivo" in modo_pdf else "COMPLETO"
+
+            with st.spinner("Generando PDF..."):
+                payload = build_report_payload_from_state(mode)
+                pdf_bytes = generate_pdf_report(payload)
+
+            st.session_state["LAST_PDF_BYTES"] = pdf_bytes
+            st.success("PDF generado.")
+
+    with colp2:
+        pdf_bytes = st.session_state.get("LAST_PDF_BYTES", None)
+        if pdf_bytes:
+            filename = f"reporte_clima_x_{datetime.now().strftime('%Y%m%d_%H%M')}.pdf"
+            st.download_button(
+                "⬇️ Descargar PDF",
+                data=pdf_bytes,
+                file_name=filename,
+                mime="application/pdf",
+                key="btn_download_pdf"
+            )
+
+    st.divider()
 
     # 👇 IMPORTANTE:
     # Aquí NO vuelvas a llamar a la API.
@@ -2357,4 +2936,6 @@ if st.session_state.get("HAS_RESULTS", False):
             )
     else:
         st.info("Sin resultados de amplificación para mostrar.")
+
+
 
