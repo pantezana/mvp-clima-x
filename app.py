@@ -30,6 +30,8 @@ TOP_TWEETS_CONV_REPLIES = 20     # top tweets conversación a los que se les bus
 TOP_TWEETS_AMP_REPLIES  = 20     # top tweets amplificación (originales amplificados) a los que se les buscará replies
 MAX_REPLIES_POR_TWEET   = 50     # máximo replies por tweet objetivo (control de cuota)
 MIN_REPLIES_ALERTA      = 20     # mínimo replies para considerar temperatura/alertas como “señal razonable”
+W_REPLIES = 5                    # Score = Interacción + (W_REPLIES * Replies)
+
 
 # Límite de publicaciones a consultar (control de cuota)
 limite_opcion = st.selectbox(
@@ -683,6 +685,123 @@ def fetch_por_tipo(client, base_query, start_time, max_posts, tweet_fields_req, 
 
     return tweets_unique, users_all
 
+def _make_open_link(url: str) -> str:
+    return f'<a href="{url}" target="_blank">Abrir</a>' if isinstance(url, str) and url else ""
+
+def _make_open_link_reply(reply_id: str) -> str:
+    rid = str(reply_id) if reply_id else ""
+    url = f"https://x.com/i/web/status/{rid}" if rid else ""
+    return _make_open_link(url)
+
+def _sent_rank_for_sort(sent: str) -> int:
+    # Para "Negativos primero": Negativo (0), Neutral (1), Positivo (2), N/A (3)
+    if sent == "Negativo":
+        return 0
+    if sent == "Neutral":
+        return 1
+    if sent == "Positivo":
+        return 2
+    return 3
+
+def render_replies_expanders_top10(
+    df_top10: pd.DataFrame,
+    df_replies: pd.DataFrame,
+    scope: str,
+    id_col: str,
+    title_prefix: str = "💬 Replies"
+):
+    """
+    UX 1: expanders por fila (solo Top 10).
+    - scope: "CONV" o "AMP"
+    - id_col: "tweet_id" (conv) o "original_id" (amp)
+    """
+    if df_top10 is None or df_top10.empty:
+        return
+    if df_replies is None or df_replies.empty:
+        st.caption("No hay replies cargados para visualizar.")
+        return
+
+    # controles globales (aplican a todos los expanders)
+    c1, c2, c3 = st.columns([1.2, 1.2, 2.6])
+    with c1:
+        ver_n = st.selectbox(
+            "Mostrar replies por hilo",
+            [10, 20, 50],
+            index=0,
+            key=f"replies_ver_n_{scope}"
+        )
+    with c2:
+        orden = st.selectbox(
+            "Orden",
+            ["Negativos primero", "Más recientes"],
+            index=0,
+            key=f"replies_orden_{scope}"
+        )
+    with c3:
+        filt_sent = st.multiselect(
+            "Filtrar sentimiento",
+            ["Negativo", "Neutral", "Positivo"],
+            default=["Negativo", "Neutral", "Positivo"],
+            key=f"replies_filtro_sent_{scope}"
+        )
+
+    st.caption("Tip: por defecto muestra Top 10 replies; puedes cambiar a 20/50. No consume cuota de X.")
+
+    # loop por cada fila (Top 10)
+    for i, row in df_top10.iterrows():
+        target_id = str(row.get(id_col, "") or "")
+        if not target_id:
+            continue
+
+        # filtrar replies de ese hilo/objetivo
+        dfr = df_replies[(df_replies["scope"] == scope) & (df_replies["target_id"].astype(str) == target_id)].copy()
+
+        n_total = len(dfr)
+        autor = str(row.get("Autor", ""))
+        fecha = row.get("Fecha") or row.get("Fechaua") or ""
+        # muestra corta del texto para el título
+        texto_base = str(row.get("Texto", "") or row.get("Texto_original", "") or "")
+        texto_short = (texto_base[:80] + "…") if len(texto_base) > 80 else texto_base
+
+        exp_title = f"{title_prefix} ({n_total}) — {autor} — {texto_short}"
+        with st.expander(exp_title, expanded=False):
+            if dfr.empty:
+                st.info("Sin replies para este hilo dentro del rango.")
+                continue
+
+            # normalizar fecha
+            dfr["Fecha"] = pd.to_datetime(dfr["Fecha"], errors="coerce")
+
+            # filtrar sentimiento
+            if filt_sent:
+                dfr = dfr[dfr["Sentimiento"].isin(filt_sent)].copy()
+
+            if dfr.empty:
+                st.info("No hay replies con ese filtro de sentimiento.")
+                continue
+
+            # ordenar
+            if orden == "Más recientes":
+                dfr = dfr.sort_values("Fecha", ascending=False)
+            else:
+                # Negativos primero + más recientes dentro de cada grupo
+                dfr["__srank"] = dfr["Sentimiento"].apply(_sent_rank_for_sort)
+                dfr = dfr.sort_values(["__srank", "Fecha"], ascending=[True, False])
+
+            # recortar N
+            dfr = dfr.head(int(ver_n)).copy()
+
+            # armar tabla simple de replies
+            dfr["Link"] = dfr["reply_id"].apply(_make_open_link_reply)
+            cols_rep = ["Fecha", "Sentimiento", "Likes", "Retweets", "Texto", "Link"]
+
+            # formateo fecha amigable (sin romper NaT)
+            dfr["Fecha"] = dfr["Fecha"].dt.strftime("%Y-%m-%d %H:%M:%S").fillna("")
+
+            st.markdown(
+                dfr[cols_rep].to_html(escape=False, index=False),
+                unsafe_allow_html=True
+            )
 
 if st.button("Buscar en X"):
     now = time.time()
@@ -1958,12 +2077,18 @@ if st.button("Buscar en X"):
                 # columnas por consistencia
                 df_conv_base["Replies"] = 0
                 df_conv_base["Sentimiento_replies"] = "N/A"
-        
-            # ✅ Rank por Interacción (si existe)
-            if "Interacción" in df_conv_base.columns:
-                df_conv_rank = df_conv_base.sort_values("Interacción", ascending=False).copy()
-            else:
-                df_conv_rank = df_conv_base.copy()
+
+            # ✅ Rank por Score = Interacción + (W_REPLIES * Replies)
+            if "Interacción" not in df_conv_base.columns:
+                df_conv_base["Interacción"] = (
+                    pd.to_numeric(df_conv_base.get("Likes", 0), errors="coerce").fillna(0) +
+                    pd.to_numeric(df_conv_base.get("Retweets", 0), errors="coerce").fillna(0)
+                )
+            
+            df_conv_base["Replies"] = pd.to_numeric(df_conv_base.get("Replies", 0), errors="coerce").fillna(0).astype(int)
+            df_conv_base["Score_ranking"] = df_conv_base["Interacción"] + (W_REPLIES * df_conv_base["Replies"])
+            
+            df_conv_rank = df_conv_base.sort_values("Score_ranking", ascending=False).copy()
         
             # Si por cualquier motivo quedaron títulos vacíos, ponemos fallback
             if not titulo_top:
@@ -1978,6 +2103,18 @@ if st.button("Buscar en X"):
                 cols=cols_conv,
                 top=10
             )
+
+            # 👇 UX1: leer replies por fila (Top 10 conversación)
+            if incl_replies and (df_replies is not None) and (not df_replies.empty):
+                st.markdown("#### 💬 Leer replies — TOP 10 (Conversación)")
+                df_conv_top10 = df_conv_rank.head(10).copy()
+                render_replies_expanders_top10(
+                    df_top10=df_conv_top10,
+                    df_replies=df_replies,
+                    scope="CONV",
+                    id_col="tweet_id",
+                    title_prefix="💬 Replies (conv)"
+                )
         
             # TABLA 2) TODOS
             with st.expander(titulo_all):
@@ -1993,48 +2130,114 @@ if st.button("Buscar en X"):
         # ------------------------------------------------------------
         
         if incl_retweets:
-            if not df_amplificacion.empty:
-                df_amp_rank = df_amplificacion.sort_values("Ampl_total", ascending=False).copy()
-            else:
+            if df_amplificacion is not None and not df_amplificacion.empty:
+                # ranking base (luego re-rankearemos por Score_ranking)
                 df_amp_rank = df_amplificacion.copy()
-
-            # --- Enriquecer amplificación con Replies agregados (si existe)
-            if incl_replies and (df_replies_amp_agg is not None) and (not df_replies_amp_agg.empty):
-                tmp_rep2 = df_replies_amp_agg.rename(columns={"target_id": "original_id"}).copy()
-                tmp_rep2["original_id"] = tmp_rep2["original_id"].astype(str)
-            
-                df_amp_rank["original_id"] = df_amp_rank["original_id"].astype(str)
-                df_amp_rank = df_amp_rank.merge(
-                    tmp_rep2[["original_id", "Replies", "Sentimiento_replies"]],
-                    on="original_id",
-                    how="left"
-                )
-                df_amp_rank["Replies"] = df_amp_rank["Replies"].fillna(0).astype(int)
-                df_amp_rank["Sentimiento_replies"] = df_amp_rank["Sentimiento_replies"].fillna("N/A")
             else:
-                df_amp_rank["Replies"] = 0
-                df_amp_rank["Sentimiento_replies"] = "N/A"
-
-            
-            cols_top_amp = [               
-                "Autor",
-                "Fechaua",
-                "Ampl_total",
-                "RT_puros_en_rango",
-                "Likesta",
-                "Sentimiento_dominante",
-                "Replies", "Sentimiento_replies",
-                "Ubicación_dominante", "Confianza_dominante",
-                "Texto_original",
-                "Link"
-            ]
-            
-            render_table(
-                df_amp_rank,
-                "3) 📣 Top 10 — Amplificación (muestra el tweet ORIGINAL amplificado)",
-                cols=cols_top_amp,
-                top=10
-            )
+                df_amp_rank = pd.DataFrame()
+        
+            if df_amp_rank.empty:
+                st.info("No se encontraron datos de amplificación para mostrar.")
+            else:
+                # ─────────────────────────────────────────────
+                # 1) Enriquecer amplificación con Replies agregados (si existe)
+                # ─────────────────────────────────────────────
+                if incl_replies and (df_replies_amp_agg is not None) and (not df_replies_amp_agg.empty):
+                    tmp_rep2 = df_replies_amp_agg.rename(columns={"target_id": "original_id"}).copy()
+                    tmp_rep2["original_id"] = tmp_rep2["original_id"].astype(str)
+        
+                    df_amp_rank["original_id"] = df_amp_rank["original_id"].astype(str)
+                    df_amp_rank = df_amp_rank.merge(
+                        tmp_rep2[["original_id", "Replies", "Sentimiento_replies"]],
+                        on="original_id",
+                        how="left"
+                    )
+                    df_amp_rank["Replies"] = pd.to_numeric(df_amp_rank["Replies"], errors="coerce").fillna(0).astype(int)
+                    df_amp_rank["Sentimiento_replies"] = df_amp_rank["Sentimiento_replies"].fillna("N/A")
+                else:
+                    df_amp_rank["Replies"] = 0
+                    df_amp_rank["Sentimiento_replies"] = "N/A"
+        
+                # ─────────────────────────────────────────────
+                # 2) Blindajes de columnas clave (Ampl_total, Fechaua, URL_original)
+                # ─────────────────────────────────────────────
+                # Ampl_total
+                if "Ampl_total" not in df_amp_rank.columns:
+                    rt_col = "RT_puros_en_rango" if "RT_puros_en_rango" in df_amp_rank.columns else None
+                    q_col  = "Quotes_en_rango" if "Quotes_en_rango" in df_amp_rank.columns else None
+        
+                    if rt_col and q_col:
+                        df_amp_rank["Ampl_total"] = (
+                            pd.to_numeric(df_amp_rank[rt_col], errors="coerce").fillna(0) +
+                            pd.to_numeric(df_amp_rank[q_col], errors="coerce").fillna(0)
+                        )
+                    elif rt_col:
+                        df_amp_rank["Ampl_total"] = pd.to_numeric(df_amp_rank[rt_col], errors="coerce").fillna(0)
+                    else:
+                        df_amp_rank["Ampl_total"] = 0
+        
+                df_amp_rank["Ampl_total"] = pd.to_numeric(df_amp_rank["Ampl_total"], errors="coerce").fillna(0)
+        
+                # Fechaua (si no existe)
+                if "Fechaua" not in df_amp_rank.columns:
+                    if "Fecha_ultima_amplificacion" in df_amp_rank.columns:
+                        _f = pd.to_datetime(df_amp_rank["Fecha_ultima_amplificacion"], errors="coerce", utc=True)
+                        df_amp_rank["Fechaua"] = _f.dt.tz_convert(None)
+                    else:
+                        df_amp_rank["Fechaua"] = ""
+        
+                # URL_original (para que Link no quede vacío)
+                if "URL_original" not in df_amp_rank.columns:
+                    if "original_id" in df_amp_rank.columns:
+                        df_amp_rank["URL_original"] = df_amp_rank["original_id"].astype(str).apply(
+                            lambda oid: f"https://x.com/i/web/status/{oid}"
+                        )
+                    else:
+                        df_amp_rank["URL_original"] = ""
+        
+                # ─────────────────────────────────────────────
+                # 3) Rank por Score = Ampl_total + (W_REPLIES * Replies)
+                # ─────────────────────────────────────────────
+                df_amp_rank["Replies"] = pd.to_numeric(df_amp_rank.get("Replies", 0), errors="coerce").fillna(0).astype(int)
+                df_amp_rank["Score_ranking"] = df_amp_rank["Ampl_total"] + (W_REPLIES * df_amp_rank["Replies"])
+                df_amp_rank = df_amp_rank.sort_values("Score_ranking", ascending=False).copy()
+        
+                # ─────────────────────────────────────────────
+                # 4) Render tabla TOP 10
+                # ─────────────────────────────────────────────
+                cols_top_amp = [
+                    "Autor",
+                    "Fechaua",
+                    "Ampl_total",
+                    "RT_puros_en_rango",
+                    "Likesta",
+                    "Sentimiento_dominante",
+                    "Replies", "Sentimiento_replies",
+                    "Ubicación_dominante", "Confianza_dominante",
+                    "Texto_original",
+                    "Link"
+                ]
+        
+                render_table(
+                    df_amp_rank,
+                    "3) 📣 Top 10 — Amplificación (muestra el tweet ORIGINAL amplificado)",
+                    cols=cols_top_amp,
+                    top=10
+                )
+        
+                # ─────────────────────────────────────────────
+                # 5) UX1: leer replies por fila (Top 10 amplificación)
+                # ─────────────────────────────────────────────
+                if incl_replies and (df_replies is not None) and (not df_replies.empty):
+                    st.markdown("#### 💬 Leer replies — TOP 10 (Amplificación)")
+                    df_amp_top10 = df_amp_rank.head(10).copy()
+                    render_replies_expanders_top10(
+                        df_top10=df_amp_top10,
+                        df_replies=df_replies,
+                        scope="AMP",
+                        id_col="original_id",
+                        title_prefix="💬 Replies (amp)"
+                    )
             
             # ------------------------------------------------------------
             # TABLA 4) TODOS — Amplificación (muestra el TWEET ORIGINAL)
