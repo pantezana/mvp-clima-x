@@ -2557,8 +2557,7 @@ if st.button("Buscar en X"):
         
         # Renderizar
         if df_conv_base is None or df_conv_base.empty:
-            # st.info("No se muestran tablas de 'Conversación' porque no hay datos (Originales/Quotes) con los filtros actuales.")
-            pass
+            st.info("No se muestran tablas de 'Conversación' porque no hay datos (Originales/Quotes) con los filtros actuales.")
         else:
             # ---------------------------------------------------------
             # Enriquecer conversación con Replies agregados (si existe)
@@ -2612,33 +2611,33 @@ if st.button("Buscar en X"):
                 titulo_all = "2) 📄 Ver TODA la conversación"
         
             # TABLA 1) TOP 10
-            # render_table(
-            #    df_conv_rank,
-            #    titulo_top,
-            #    cols=cols_conv,
-            #    top=10
-            #)
+            render_table(
+                df_conv_rank,
+                titulo_top,
+                cols=cols_conv,
+                top=10
+            )
 
             # 👇 UX1: leer replies por fila (Top 10 conversación)
-            #if incl_replies and (df_replies is not None) and (not df_replies.empty):
-            #    st.markdown("#### 💬 Leer replies — TOP 10 (Conversación)")
-            #    df_conv_top10 = df_conv_rank.head(10).copy()
-            #    render_replies_expanders_top10(
-            #        df_top10=df_conv_top10,
-            #        df_replies=df_replies,
-            #        scope="CONV",
-            #        id_col="tweet_id",
-            #        title_prefix="💬 Replies (conv)"
-            #    )
+            if incl_replies and (df_replies is not None) and (not df_replies.empty):
+                st.markdown("#### 💬 Leer replies — TOP 10 (Conversación)")
+                df_conv_top10 = df_conv_rank.head(10).copy()
+                render_replies_expanders_top10(
+                    df_top10=df_conv_top10,
+                    df_replies=df_replies,
+                    scope="CONV",
+                    id_col="tweet_id",
+                    title_prefix="💬 Replies (conv)"
+                )
         
             # TABLA 2) TODOS
-            # with st.expander(titulo_all):
-            #    render_table(
-            #        df_conv_rank,
-            #        titulo_all,
-            #        cols=cols_conv,
-            #        top=None
-            #    )    
+            with st.expander(titulo_all):
+                render_table(
+                    df_conv_rank,
+                    titulo_all,
+                    cols=cols_conv,
+                    top=None
+                )    
         # ------------------------------------------------------------
         # TABLA 3) TOP 10 — Amplificación (muestra el TWEET ORIGINAL)
         # Ranking: Ampl_total (RT puros + Quotes) en el rango
@@ -2652,8 +2651,7 @@ if st.button("Buscar en X"):
                 df_amp_rank = pd.DataFrame()
         
             if df_amp_rank.empty:
-                # st.info("No se encontraron datos de amplificación para mostrar.")
-                pass
+                st.info("No se encontraron datos de amplificación para mostrar.")
             else:
                 # ─────────────────────────────────────────────
                 # 1) Enriquecer amplificación con Replies agregados (si existe)
@@ -2734,46 +2732,45 @@ if st.button("Buscar en X"):
                     "Link"
                 ]
         
-                # render_table(
-                #    df_amp_rank,
-                #    "3) 📣 Top 10 — Amplificación (muestra el tweet ORIGINAL amplificado)",
-                #    cols=cols_top_amp,
-                #    top=10
-                #)
+                render_table(
+                    df_amp_rank,
+                    "3) 📣 Top 10 — Amplificación (muestra el tweet ORIGINAL amplificado)",
+                    cols=cols_top_amp,
+                    top=10
+                )
         
                 # ─────────────────────────────────────────────
                 # 5) UX1: leer replies por fila (Top 10 amplificación)
                 # ─────────────────────────────────────────────
-                # if incl_replies and (df_replies is not None) and (not df_replies.empty):
-                #    st.markdown("#### 💬 Leer replies — TOP 10 (Amplificación)")
-                #    df_amp_top10 = df_amp_rank.head(10).copy()
-                #    render_replies_expanders_top10(
-                #        df_top10=df_amp_top10,
-                #        df_replies=df_replies,
-                #        scope="AMP",
-                #        id_col="original_id",
-                #        title_prefix="💬 Replies (amp)"
-                #    )
+                if incl_replies and (df_replies is not None) and (not df_replies.empty):
+                    st.markdown("#### 💬 Leer replies — TOP 10 (Amplificación)")
+                    df_amp_top10 = df_amp_rank.head(10).copy()
+                    render_replies_expanders_top10(
+                        df_top10=df_amp_top10,
+                        df_replies=df_replies,
+                        scope="AMP",
+                        id_col="original_id",
+                        title_prefix="💬 Replies (amp)"
+                    )
             
             # ------------------------------------------------------------
             # TABLA 4) TODOS — Amplificación (muestra el TWEET ORIGINAL)
             # ------------------------------------------------------------
-            # with st.expander("4) 📄 Ver TODA la amplificación (tweet ORIGINAL agregado)"):
-            #    render_table(
-            #        df_amp_rank,
-            #        "4) 📄 Toda la amplificación (tweet ORIGINAL agregado)",
-            #        cols=cols_top_amp,
-            #        top=None
-            #    )
+            with st.expander("4) 📄 Ver TODA la amplificación (tweet ORIGINAL agregado)"):
+                render_table(
+                    df_amp_rank,
+                    "4) 📄 Toda la amplificación (tweet ORIGINAL agregado)",
+                    cols=cols_top_amp,
+                    top=None
+                )
         else:
-            # st.info("No se muestra 'Amplificación' porque no está seleccionado 'RT puros'.")
-            pass
-            
-        # st.caption(
-        #    "Nota: En Amplificación, se muestra el tweet ORIGINAL una sola vez por fila. "
-        #    "Los RT puros y quotes se contabilizan en columnas (RT_puros_en_rango, Quotes_en_rango, Ampl_total). "
-        #    "El botón 'Abrir' siempre abre el tweet ORIGINAL."
-        #)
+            st.info("No se muestra 'Amplificación' porque no está seleccionado 'RT puros'.")
+        
+        st.caption(
+            "Nota: En Amplificación, se muestra el tweet ORIGINAL una sola vez por fila. "
+            "Los RT puros y quotes se contabilizan en columnas (RT_puros_en_rango, Quotes_en_rango, Ampl_total). "
+            "El botón 'Abrir' siempre abre el tweet ORIGINAL."
+        )
 
         # ─────────────────────────────
         # Preparar recursos para PDF (NO consume cuota)
@@ -2834,6 +2831,7 @@ if st.button("Buscar en X"):
             DF_REPLIES_AMP_AGG=df_replies_amp_agg if "df_replies_amp_agg" in locals() else pd.DataFrame(),
             COLS_CONV=cols_conv,
             COLS_TOP_AMP=cols_top_amp,
+
             # ✅ NUEVO: para PDF
             REPORT_KPIS=report_kpis,
             REPORT_ALERTAS=alertas,
@@ -2843,25 +2841,12 @@ if st.button("Buscar en X"):
             # (opcional: guardar query/time_range explícito)
             query=query,
             time_range=time_range,
-            # ✅ NUEVO: títulos para render persistente
-            TITULO_TOP_CONV=titulo_top if "titulo_top" in locals() and titulo_top else "1) 🔥 Top 10 — Conversación",
-            TITULO_TOP_AMP="3) 📣 Top 10 — Amplificación (muestra el tweet ORIGINAL amplificado)",
-            TITULO_ALL_CONV=titulo_all if "titulo_all" in locals() and titulo_all else "2) 📄 Ver TODA la conversación",
-            TITULO_ALL_AMP="4) 📄 Ver TODA la amplificación (tweet ORIGINAL agregado)",
         )
-
-        st.rerun()
 
 # ─────────────────────────────
 # Render persistente: si ya hay resultados, se muestran aunque cambies selects
 # ─────────────────────────────
 if st.session_state.get("HAS_RESULTS", False):
-
-    # ✅ Evita doble render en el MISMO run cuando vienes de "Buscar en X"
-    if st.session_state.get("SKIP_PERSISTENT_RENDER_ONCE", False):
-        st.session_state["SKIP_PERSISTENT_RENDER_ONCE"] = False
-        # No renderizamos nada persistente en este run para evitar duplicados
-        st.stop()
 
     df_conv_rank = st.session_state.get("DF_CONV_RANK", pd.DataFrame())
     df_amp_rank  = st.session_state.get("DF_AMP_RANK", pd.DataFrame())
@@ -2914,13 +2899,11 @@ if st.session_state.get("HAS_RESULTS", False):
     # Solo vuelve a mostrar tablas + UX de replies.
 
     if df_conv_rank is not None and not df_conv_rank.empty:
-        # TABLA 1) TOP 10
-        render_table(df_conv_rank, "1) 🔥 Top 10 — Conversación R", cols=cols_conv, top=10)
-    
-        # UX replies TOP 10 (si aplica)
+        render_table(df_conv_rank, "1) 🔥 Top 10 — Conversación", cols=cols_conv, top=10)
+
         incl_replies = st.session_state.get("incl_replies", False)
         if incl_replies and (df_replies is not None) and (not df_replies.empty):
-            st.markdown("#### 💬 Leer replies — TOP 10 (Conversación) R")
+            st.markdown("#### 💬 Leer replies — TOP 10 (Conversación)")
             df_conv_top10 = df_conv_rank.head(10).copy()
             render_replies_expanders_top10(
                 df_top10=df_conv_top10,
@@ -2929,36 +2912,20 @@ if st.session_state.get("HAS_RESULTS", False):
                 id_col="tweet_id",
                 title_prefix="💬 Replies (conv)"
             )
-    
-        # TABLA 2) VER TODO (EXPANDER)
-        titulo_all_conv = st.session_state.get(
-            "TITULO_ALL_CONV",
-            "2) 📄 Ver TODA la conversación R"
-        )
-    
-        with st.expander(titulo_all_conv):
-            render_table(
-                df_conv_rank,
-                titulo_all_conv,
-                cols=cols_conv,
-                top=None
-            )
     else:
         st.info("Sin resultados de conversación para mostrar.")
 
     if df_amp_rank is not None and not df_amp_rank.empty:
-        # TABLA 3) TOP 10
         render_table(
             df_amp_rank,
-            "3) 📣 Top 10 — Amplificación (muestra el tweet ORIGINAL amplificado R)",
+            "3) 📣 Top 10 — Amplificación (muestra el tweet ORIGINAL amplificado)",
             cols=cols_top_amp,
             top=10
         )
-    
-        # UX replies TOP 10 (si aplica)
+
         incl_replies = st.session_state.get("incl_replies", False)
         if incl_replies and (df_replies is not None) and (not df_replies.empty):
-            st.markdown("#### 💬 Leer replies — TOP 10 (Amplificación) R")
+            st.markdown("#### 💬 Leer replies — TOP 10 (Amplificación)")
             df_amp_top10 = df_amp_rank.head(10).copy()
             render_replies_expanders_top10(
                 df_top10=df_amp_top10,
@@ -2967,23 +2934,5 @@ if st.session_state.get("HAS_RESULTS", False):
                 id_col="original_id",
                 title_prefix="💬 Replies (amp)"
             )
-    
-        # TABLA 4) VER TODO (EXPANDER)
-        titulo_all_amp = st.session_state.get(
-            "TITULO_ALL_AMP",
-            "4) 📄 Ver TODA la amplificación (tweet ORIGINAL agregado) R"
-        )
-    
-        with st.expander(titulo_all_amp):
-            render_table(
-                df_amp_rank,
-                titulo_all_amp,
-                cols=cols_top_amp,
-                top=None
-            )
     else:
         st.info("Sin resultados de amplificación para mostrar.")
-
-
-
-
