@@ -24,6 +24,36 @@ time_range = st.selectbox(
 debug_gemini = False
 
 # ─────────────────────────────
+# Persistencia de resultados (evita que se borre al cambiar selects)
+# ─────────────────────────────
+if "HAS_RESULTS" not in st.session_state:
+    st.session_state["HAS_RESULTS"] = False
+
+def _save_results(**kwargs):
+    for k, v in kwargs.items():
+        st.session_state[k] = v
+    st.session_state["HAS_RESULTS"] = True
+
+def _clear_results():
+    # Borra solo lo necesario (no toca tus inputs)
+    keys_to_drop = [
+        "HAS_RESULTS",
+        "DF_CONV_RANK", "DF_AMP_RANK",
+        "DF_REPLIES", "DF_REPLIES_CONV_AGG", "DF_REPLIES_AMP_AGG",
+        "COLS_TOP_AMP", "COLS_CONV",
+    ]
+    for k in keys_to_drop:
+        if k in st.session_state:
+            del st.session_state[k]
+    st.session_state["HAS_RESULTS"] = False
+
+# Botón opcional para limpiar resultados
+if st.button("🧹 Limpiar resultados"):
+    _clear_results()
+    st.rerun()
+
+
+# ─────────────────────────────
 # Parámetros MVP de Replies (control cuota)
 # ─────────────────────────────
 TOP_TWEETS_CONV_REPLIES = 20     # top tweets conversación a los que se les buscará replies
@@ -2257,3 +2287,75 @@ if st.button("Buscar en X"):
             "Los RT puros y quotes se contabilizan en columnas (RT_puros_en_rango, Quotes_en_rango, Ampl_total). "
             "El botón 'Abrir' siempre abre el tweet ORIGINAL."
         )
+
+        # ─────────────────────────────
+        # Guardar resultados en session_state (CLAVE para que no se borre al cambiar selects)
+        # ─────────────────────────────
+        _save_results(
+            DF_CONV_RANK=df_conv_rank if "df_conv_rank" in locals() else pd.DataFrame(),
+            DF_AMP_RANK=df_amp_rank if "df_amp_rank" in locals() else pd.DataFrame(),
+            DF_REPLIES=df_replies if "df_replies" in locals() else pd.DataFrame(),
+            DF_REPLIES_CONV_AGG=df_replies_conv_agg if "df_replies_conv_agg" in locals() else pd.DataFrame(),
+            DF_REPLIES_AMP_AGG=df_replies_amp_agg if "df_replies_amp_agg" in locals() else pd.DataFrame(),
+            COLS_CONV=cols_conv,
+            COLS_TOP_AMP=cols_top_amp,
+        )
+
+# ─────────────────────────────
+# Render persistente: si ya hay resultados, se muestran aunque cambies selects
+# ─────────────────────────────
+if st.session_state.get("HAS_RESULTS", False):
+
+    df_conv_rank = st.session_state.get("DF_CONV_RANK", pd.DataFrame())
+    df_amp_rank  = st.session_state.get("DF_AMP_RANK", pd.DataFrame())
+    df_replies   = st.session_state.get("DF_REPLIES", pd.DataFrame())
+
+    df_replies_conv_agg = st.session_state.get("DF_REPLIES_CONV_AGG", pd.DataFrame())
+    df_replies_amp_agg  = st.session_state.get("DF_REPLIES_AMP_AGG", pd.DataFrame())
+
+    cols_conv    = st.session_state.get("COLS_CONV", [])
+    cols_top_amp = st.session_state.get("COLS_TOP_AMP", [])
+
+    # 👇 IMPORTANTE:
+    # Aquí NO vuelvas a llamar a la API.
+    # Solo vuelve a mostrar tablas + UX de replies.
+
+    if df_conv_rank is not None and not df_conv_rank.empty:
+        render_table(df_conv_rank, "1) 🔥 Top 10 — Conversación", cols=cols_conv, top=10)
+
+        incl_replies = st.session_state.get("incl_replies", False)
+        if incl_replies and (df_replies is not None) and (not df_replies.empty):
+            st.markdown("#### 💬 Leer replies — TOP 10 (Conversación)")
+            df_conv_top10 = df_conv_rank.head(10).copy()
+            render_replies_expanders_top10(
+                df_top10=df_conv_top10,
+                df_replies=df_replies,
+                scope="CONV",
+                id_col="tweet_id",
+                title_prefix="💬 Replies (conv)"
+            )
+    else:
+        st.info("Sin resultados de conversación para mostrar.")
+
+    if df_amp_rank is not None and not df_amp_rank.empty:
+        render_table(
+            df_amp_rank,
+            "3) 📣 Top 10 — Amplificación (muestra el tweet ORIGINAL amplificado)",
+            cols=cols_top_amp,
+            top=10
+        )
+
+        incl_replies = st.session_state.get("incl_replies", False)
+        if incl_replies and (df_replies is not None) and (not df_replies.empty):
+            st.markdown("#### 💬 Leer replies — TOP 10 (Amplificación)")
+            df_amp_top10 = df_amp_rank.head(10).copy()
+            render_replies_expanders_top10(
+                df_top10=df_amp_top10,
+                df_replies=df_replies,
+                scope="AMP",
+                id_col="original_id",
+                title_prefix="💬 Replies (amp)"
+            )
+    else:
+        st.info("Sin resultados de amplificación para mostrar.")
+
