@@ -832,6 +832,36 @@ def render_replies_expanders_top10(
                 unsafe_allow_html=True
             )
 
+def _make_open_link(url: str) -> str:
+    return f'<a href="{url}" target="_blank">Abrir</a>' if isinstance(url, str) and url else ""
+        
+def render_table(df_show: pd.DataFrame, title: str, cols: list[str], top: int | None = None):
+    st.markdown(f"### {title}")
+    if df_show is None or df_show.empty:
+        st.info("No hay datos para mostrar en esta tabla con los filtros actuales.")
+        return
+        
+    _df = df_show.copy()
+        
+    # Top N si aplica
+    if isinstance(top, int) and top > 0:
+        _df = _df.head(top).copy()
+        
+    # Link HTML "Abrir"
+    if "Link" in cols:
+        if "URL" in _df.columns:
+            _df["Link"] = _df["URL"].apply(_make_open_link)
+        elif "URL_original" in _df.columns:
+            _df["Link"] = _df["URL_original"].apply(_make_open_link)
+        else:
+            _df["Link"] = ""
+        
+    # Mostrar
+    st.markdown(
+        _df[cols].to_html(escape=False, index=False),
+        unsafe_allow_html=True
+    )
+
 if st.button("Buscar en X"):
     now = time.time()
     if now - st.session_state["last_search_ts"] < 20:
@@ -1996,36 +2026,6 @@ if st.button("Buscar en X"):
         # Si tus nombres difieren, ajusta SOLO los nombres de columna en los selects.
         
         st.markdown("## 📌 Resultados en tablas (4 vistas)")
-        
-        def _make_open_link(url: str) -> str:
-            return f'<a href="{url}" target="_blank">Abrir</a>' if isinstance(url, str) and url else ""
-        
-        def render_table(df_show: pd.DataFrame, title: str, cols: list[str], top: int | None = None):
-            st.markdown(f"### {title}")
-            if df_show is None or df_show.empty:
-                st.info("No hay datos para mostrar en esta tabla con los filtros actuales.")
-                return
-        
-            _df = df_show.copy()
-        
-            # Top N si aplica
-            if isinstance(top, int) and top > 0:
-                _df = _df.head(top).copy()
-        
-            # Link HTML "Abrir"
-            if "Link" in cols:
-                if "URL" in _df.columns:
-                    _df["Link"] = _df["URL"].apply(_make_open_link)
-                elif "URL_original" in _df.columns:
-                    _df["Link"] = _df["URL_original"].apply(_make_open_link)
-                else:
-                    _df["Link"] = ""
-        
-            # Mostrar
-            st.markdown(
-                _df[cols].to_html(escape=False, index=False),
-                unsafe_allow_html=True
-            )
         
         # ------------------------------------------------------------
         # ------------------------------------------------------------
