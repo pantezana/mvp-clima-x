@@ -2982,7 +2982,7 @@ if st.session_state.get("HAS_RESULTS", False):
                 top=None
             )
     else:
-    st.info("Sin resultados de amplificación para mostrar.")
+        st.info("Sin resultados de amplificación para mostrar.")
 
 
 
