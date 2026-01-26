@@ -24,36 +24,6 @@ time_range = st.selectbox(
 debug_gemini = False
 
 # ─────────────────────────────
-# Persistencia de resultados (evita que se borre al cambiar selects)
-# ─────────────────────────────
-if "HAS_RESULTS" not in st.session_state:
-    st.session_state["HAS_RESULTS"] = False
-
-def _save_results(**kwargs):
-    for k, v in kwargs.items():
-        st.session_state[k] = v
-    st.session_state["HAS_RESULTS"] = True
-
-def _clear_results():
-    # Borra solo lo necesario (no toca tus inputs)
-    keys_to_drop = [
-        "HAS_RESULTS",
-        "DF_CONV_RANK", "DF_AMP_RANK",
-        "DF_REPLIES", "DF_REPLIES_CONV_AGG", "DF_REPLIES_AMP_AGG",
-        "COLS_TOP_AMP", "COLS_CONV",
-    ]
-    for k in keys_to_drop:
-        if k in st.session_state:
-            del st.session_state[k]
-    st.session_state["HAS_RESULTS"] = False
-
-# Botón opcional para limpiar resultados
-if st.button("🧹 Limpiar resultados"):
-    _clear_results()
-    st.rerun()
-
-
-# ─────────────────────────────
 # Parámetros MVP de Replies (control cuota)
 # ─────────────────────────────
 TOP_TWEETS_CONV_REPLIES = 20     # top tweets conversación a los que se les buscará replies
@@ -149,6 +119,35 @@ modelo_nombre = st.selectbox(
 modelo_hf_id = MODELOS_SENTIMIENTO[modelo_nombre]
 HF_MODEL_URL = f"https://router.huggingface.co/hf-inference/models/{modelo_hf_id}"
 
+
+# ─────────────────────────────
+# Persistencia de resultados (evita que se borre al cambiar selects)
+# ─────────────────────────────
+if "HAS_RESULTS" not in st.session_state:
+    st.session_state["HAS_RESULTS"] = False
+
+def _save_results(**kwargs):
+    for k, v in kwargs.items():
+        st.session_state[k] = v
+    st.session_state["HAS_RESULTS"] = True
+
+def _clear_results():
+    # Borra solo lo necesario (no toca tus inputs)
+    keys_to_drop = [
+        "HAS_RESULTS",
+        "DF_CONV_RANK", "DF_AMP_RANK",
+        "DF_REPLIES", "DF_REPLIES_CONV_AGG", "DF_REPLIES_AMP_AGG",
+        "COLS_TOP_AMP", "COLS_CONV",
+    ]
+    for k in keys_to_drop:
+        if k in st.session_state:
+            del st.session_state[k]
+    st.session_state["HAS_RESULTS"] = False
+
+# Botón opcional para limpiar resultados
+if st.button("🧹 Limpiar resultados"):
+    _clear_results()
+    st.rerun()
 
 # Lista simple (MVP) de departamentos/ciudades clave para inferir ubicación
 PERU_PLACES = [
