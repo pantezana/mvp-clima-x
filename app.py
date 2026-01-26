@@ -23,6 +23,14 @@ time_range = st.selectbox(
 
 debug_gemini = False
 
+# ─────────────────────────────
+# Parámetros MVP de Replies (control cuota)
+# ─────────────────────────────
+TOP_TWEETS_CONV_REPLIES = 20     # top tweets conversación a los que se les buscará replies
+TOP_TWEETS_AMP_REPLIES  = 20     # top tweets amplificación (originales amplificados) a los que se les buscará replies
+MAX_REPLIES_POR_TWEET   = 50     # máximo replies por tweet objetivo (control de cuota)
+MIN_REPLIES_ALERTA      = 20     # mínimo replies para considerar temperatura/alertas como “señal razonable”
+
 # Límite de publicaciones a consultar (control de cuota)
 limite_opcion = st.selectbox(
     "Límite de publicaciones a consultar (control de cuota X)",
@@ -34,13 +42,15 @@ max_posts = None if "Sin límite" in limite_opcion else int(limite_opcion)
 
 st.markdown("### Tipo de contenido a analizar")
 
-c1, c2, c3 = st.columns(3)
+c1, c2, c3, c4 = st.columns(4)
 with c1:
     incluir_originales = st.checkbox("Posts originales", value=True)
 with c2:
     incluir_retweets = st.checkbox("Retweets (RT puros)", value=True)
 with c3:
     incluir_quotes = st.checkbox("Retweets con cita (quote)", value=True)
+with c4:
+    incluir_replies = st.checkbox("Replies (comentarios)", value=False)
 
 # Regla simple de validación (neófito-friendly)
 if not (incluir_originales or incluir_retweets or incluir_quotes):
@@ -87,6 +97,7 @@ st.session_state["incl_originales"] = incluir_originales
 st.session_state["incl_retweets"] = incluir_retweets
 st.session_state["incl_quotes"] = incluir_quotes
 st.session_state["query_final"] = query_final
+st.session_state["incl_replies"] = incluir_replies
 
 # ─────────────────────────────
 # Selector de modelo de sentimiento (Hugging Face)
@@ -248,7 +259,7 @@ Tu objetivo es ayudar a un tomador de decisiones con un resumen claro, profesion
 
 CONTEXTO:
 Los INSUMOS provienen de publicaciones públicas en X sobre una temática (query) durante un rango temporal (time_range).
-Incluyen volumen, distribución de sentimiento estimada, términos dominantes y ejemplos de posts con más interacción.
+Incluyen volumen, distribución de sentimiento estimada, términos dominantes, ejemplos de posts con más interacción y (si está activado) métricas de replies: cantidad, % negativo y temperatura por conversación y amplificación.
 
 IMPORTANTE:
 - No inventes datos.
@@ -383,23 +394,21 @@ def fetch_tweets_paginado(
 def fetch_originals_by_ids(client, original_ids: list[str]):
     """
     Devuelve un dict:
-      original_id -> {"autor": "@username", "url": "...", "texto": "..."}
+      original_id -> {"autor": "@username", "url": "...", "texto": "...", "conversation_id": "..."}
     """
     original_ids = [str(x) for x in original_ids if x]
     if not original_ids:
         return {}
 
-    # Twitter v2 permite hasta 100 ids por llamada
     ids_chunk = original_ids[:100]
 
     resp = client.get_tweets(
         ids=ids_chunk,
-        tweet_fields=["created_at", "public_metrics", "author_id"],
+        tweet_fields=["created_at", "public_metrics", "author_id", "conversation_id"],
         expansions=["author_id"],
         user_fields=["username", "name"]
     )
 
-    # Map de usuarios
     users_by_id = {}
     if resp and resp.includes and "users" in resp.includes:
         for u in resp.includes["users"]:
@@ -413,13 +422,104 @@ def fetch_originals_by_ids(client, original_ids: list[str]):
             username = getattr(u, "username", None) if u else None
             autor = f"@{username}" if username else "Desconocido"
             oid = str(getattr(tw, "id", ""))
+
             out[oid] = {
                 "autor": autor,
                 "url": f"https://x.com/{username}/status/{oid}" if username else f"https://x.com/i/web/status/{oid}",
-                "texto": getattr(tw, "text", "") or ""
+                "texto": getattr(tw, "text", "") or "",
+                "conversation_id": str(getattr(tw, "conversation_id", "")) if getattr(tw, "conversation_id", None) else None
             }
     return out
 
+def sentimiento_dominante_conservador(series_sent: pd.Series) -> str:
+    """
+    Devuelve el sentimiento dominante con desempate conservador:
+    Negativo > Neutral > Positivo
+    """
+    if series_sent is None or len(series_sent) == 0:
+        return "N/A"
+
+    s = series_sent.dropna()
+    if s.empty:
+        return "N/A"
+
+    counts = s.value_counts().to_dict()
+    neg = counts.get("Negativo", 0)
+    neu = counts.get("Neutral", 0)
+    pos = counts.get("Positivo", 0)
+
+    m = max(neg, neu, pos)
+    # desempate conservador
+    if neg == m and m > 0:
+        return "Negativo"
+    if neu == m and m > 0:
+        return "Neutral"
+    if pos == m and m > 0:
+        return "Positivo"
+    return "N/A"
+
+def calc_temperatura_con_min(pct_neg: float, pct_pos: float, n: int, min_n: int = 20):
+    """
+    Temperatura con umbral mínimo de muestra:
+    - si n < min_n -> "⚪ Insuficiente"
+    """
+    if n < min_n:
+        return "⚪ Insuficiente"
+    if pct_neg >= 40:
+        return "🔴 Riesgo reputacional"
+    if pct_pos >= 60 and pct_neg < 25:
+        return "🟢 Clima favorable"
+    return "🟡 Mixto / neutro"
+
+def fetch_replies_for_conversation_id(
+    client,
+    conversation_id: str,
+    start_time: str,
+    max_replies: int = 50
+):
+    """
+    Trae replies (is:reply) de un hilo identificado por conversation_id.
+    Devuelve lista de tweets (reply objects).
+    """
+    if not conversation_id:
+        return []
+
+    query = f"conversation_id:{conversation_id} is:reply"
+
+    replies_all = []
+    next_token = None
+    page_size = 100
+
+    while True:
+        if max_replies is not None and len(replies_all) >= max_replies:
+            break
+
+        req_size = page_size
+        if max_replies is not None:
+            req_size = min(page_size, max_replies - len(replies_all))
+            req_size = max(10, req_size)
+
+        resp = client.search_recent_tweets(
+            query=query,
+            start_time=start_time,
+            max_results=req_size,
+            tweet_fields=["created_at", "public_metrics", "author_id", "conversation_id", "lang"],
+            expansions=["author_id"],
+            user_fields=["username", "name", "location", "description"],
+            next_token=next_token
+        )
+
+        if not resp or not resp.data:
+            break
+
+        replies_all.extend(resp.data)
+
+        meta = getattr(resp, "meta", {}) or {}
+        next_token = meta.get("next_token")
+        if not next_token:
+            break
+
+    return replies_all
 
 # --- Preparación de texto
             
@@ -1074,6 +1174,154 @@ if st.button("Buscar en X"):
         # Guardamos dfs clave para PARTE 5/6 (KPIs + tablas + gráficos)
         st.session_state["df_conversacion_rows"] = int(len(df_conversacion))
         st.session_state["df_amplificacion_rows"] = int(len(df_amplificacion)) if df_amplificacion is not None else 0
+
+        # =========================
+        # PARTE 4.7 — Replies (comentarios) por Conversación y Amplificación (opcional)
+        # =========================
+        incl_replies = st.session_state.get("incl_replies", False)
+        
+        df_replies = pd.DataFrame()
+        df_replies_agg = pd.DataFrame()      # agregado por objetivo (tweet objetivo)
+        df_replies_conv_agg = pd.DataFrame() # agregado para conversación
+        df_replies_amp_agg = pd.DataFrame()  # agregado para amplificación (por original_id)
+        
+        if incl_replies:
+            st.markdown("### 💬 Replies (comentarios) — activado")
+        
+            # 1) Targets Conversación: top por Interacción (tweets de df_conversacion)
+            conv_targets = []
+            if df_conversacion is not None and not df_conversacion.empty:
+                df_conv_targets = df_conversacion.copy()
+                if "Interacción" not in df_conv_targets.columns:
+                    df_conv_targets["Interacción"] = (
+                        pd.to_numeric(df_conv_targets.get("Likes", 0), errors="coerce").fillna(0) +
+                        pd.to_numeric(df_conv_targets.get("Retweets", 0), errors="coerce").fillna(0)
+                    )
+                df_conv_targets = df_conv_targets.sort_values("Interacción", ascending=False).head(TOP_TWEETS_CONV_REPLIES)
+                # para conv, el objetivo es el propio tweet (tweet_id) y conversation_id ya viene
+                conv_targets = df_conv_targets[["tweet_id", "conversation_id"]].dropna().astype(str).to_dict("records")
+        
+            # 2) Targets Amplificación: top por Ampl_total (tweets originales amplificados)
+            amp_targets = []
+            if incl_retweets and df_amplificacion is not None and not df_amplificacion.empty:
+                # Para amplificación, debemos asegurar conversation_id del ORIGINAL
+                # Ya trajimos originals_info en 4.5; lo reutilizamos:
+                try:
+                    # Si originals_info no existe por scope, lo reconstruimos rápido:
+                    if "originals_info" not in locals():
+                        original_ids_list = df_amplificacion["original_id"].dropna().astype(str).unique().tolist()
+                        originals_info = fetch_originals_by_ids(client, original_ids_list)
+                except Exception:
+                    originals_info = {}
+        
+                df_amp_targets = df_amplificacion.sort_values("Ampl_total", ascending=False).head(TOP_TWEETS_AMP_REPLIES).copy()
+                df_amp_targets["conversation_id"] = df_amp_targets["original_id"].astype(str).apply(
+                    lambda oid: originals_info.get(str(oid), {}).get("conversation_id", None)
+                )
+                # objetivo = original_id (porque replies se miden sobre el original)
+                amp_targets = df_amp_targets[["original_id", "conversation_id"]].dropna().astype(str).to_dict("records")
+        
+            # 3) Fetch replies por cada conversation_id objetivo
+            reply_rows = []
+            total_objetivos = len(conv_targets) + len(amp_targets)
+        
+            if total_objetivos == 0:
+                st.info("Replies activado, pero no hay tweets objetivo (conversación/amplificación) para buscar comentarios.")
+            else:
+                st.caption(
+                    f"Buscando replies en hasta {len(conv_targets)} tweet(s) de conversación y {len(amp_targets)} tweet(s) amplificados. "
+                    f"(máx {MAX_REPLIES_POR_TWEET} replies por tweet objetivo)"
+                )
+        
+                # --- Conversación replies ---
+                for item in conv_targets:
+                    target_tweet_id = str(item.get("tweet_id", ""))
+                    conv_id = str(item.get("conversation_id", ""))
+        
+                    replies_list = fetch_replies_for_conversation_id(
+                        client=client,
+                        conversation_id=conv_id,
+                        start_time=start_time,
+                        max_replies=MAX_REPLIES_POR_TWEET
+                    )
+        
+                    for r in replies_list:
+                        reply_rows.append({
+                            "scope": "CONV",
+                            "target_id": target_tweet_id,          # tweet_id objetivo
+                            "conversation_id": conv_id,
+                            "reply_id": str(getattr(r, "id", "")),
+                            "Texto": getattr(r, "text", "") or "",
+                            "Fecha": getattr(r, "created_at", None),
+                            "Likes": (getattr(r, "public_metrics", None) or {}).get("like_count", 0),
+                            "Retweets": (getattr(r, "public_metrics", None) or {}).get("retweet_count", 0),
+                        })
+        
+                # --- Amplificación replies (por original) ---
+                for item in amp_targets:
+                    original_id = str(item.get("original_id", ""))
+                    conv_id = str(item.get("conversation_id", ""))
+        
+                    replies_list = fetch_replies_for_conversation_id(
+                        client=client,
+                        conversation_id=conv_id,
+                        start_time=start_time,
+                        max_replies=MAX_REPLIES_POR_TWEET
+                    )
+        
+                    for r in replies_list:
+                        reply_rows.append({
+                            "scope": "AMP",
+                            "target_id": original_id,              # original_id objetivo
+                            "conversation_id": conv_id,
+                            "reply_id": str(getattr(r, "id", "")),
+                            "Texto": getattr(r, "text", "") or "",
+                            "Fecha": getattr(r, "created_at", None),
+                            "Likes": (getattr(r, "public_metrics", None) or {}).get("like_count", 0),
+                            "Retweets": (getattr(r, "public_metrics", None) or {}).get("retweet_count", 0),
+                        })
+        
+                df_replies = pd.DataFrame(reply_rows)
+        
+                if df_replies.empty:
+                    st.info("No se encontraron replies dentro del rango temporal seleccionado (o la API no devolvió resultados).")
+                else:
+                    # 4) Sentimiento por reply (IA o fallback léxico)
+                    sent_list = []
+                    for txt in df_replies["Texto"].tolist():
+                        s, _ = sentimiento_hf(txt)
+                        if s is None:
+                            s = calcular_sentimiento(txt)
+                        sent_list.append(s)
+        
+                    df_replies["Sentimiento"] = sent_list
+                    df_replies["Fecha"] = pd.to_datetime(df_replies["Fecha"], errors="coerce")
+        
+                    # 5) Agregado por tweet objetivo (cantidad + dominante con desempate conservador)
+                    df_replies_agg = (
+                        df_replies.groupby(["scope", "target_id"])
+                                  .agg(
+                                      Replies=("reply_id", "count"),
+                                      Sentimiento_replies=("Sentimiento", sentimiento_dominante_conservador),
+                                      Negativos=("Sentimiento", lambda s: (pd.Series(s) == "Negativo").sum()),
+                                      Positivos=("Sentimiento", lambda s: (pd.Series(s) == "Positivo").sum()),
+                                      Neutrales=("Sentimiento", lambda s: (pd.Series(s) == "Neutral").sum()),
+                                  )
+                                  .reset_index()
+                    )
+        
+                    # % negativos por objetivo (por si luego quieres ranking)
+                    df_replies_agg["Pct_neg_replies"] = df_replies_agg.apply(
+                        lambda r: round((r["Negativos"] / r["Replies"] * 100), 1) if r["Replies"] else 0.0,
+                        axis=1
+                    )
+        
+                    # 6) Separar agregados por scope
+                    df_replies_conv_agg = df_replies_agg[df_replies_agg["scope"] == "CONV"].copy()
+                    df_replies_amp_agg  = df_replies_agg[df_replies_agg["scope"] == "AMP"].copy()
+        
+        else:
+            st.caption("Replies desactivado (no se medirán comentarios).")
                 
         # =========================
         # PARTE 7 — KPI + Alertas + Resumen Gemini + Gráficos (con nueva lógica de sentimientos)
@@ -1242,47 +1490,105 @@ if st.button("Buscar en X"):
         else:
            top_autor = "N/A"
 
+        # -----------------------------
+        # 6) Mostrar KPIs (separados) + Replies (opcional)
+        # -----------------------------
+        incl_replies = st.session_state.get("incl_replies", False)
         
-        # -----------------------------
-        # 6) Mostrar KPIs (separados)
-        # -----------------------------
+        # --- KPIs Replies (default)
+        replies_conv_total = 0
+        pct_neg_replies_conv = 0.0
+        pct_pos_replies_conv = 0.0
+        temp_replies_conv = "N/A"
+        
+        replies_amp_total = 0
+        pct_neg_replies_amp = 0.0
+        pct_pos_replies_amp = 0.0
+        temp_replies_amp = "N/A"
+        
+        # Calculamos KPI global de replies por scope (si hay df_replies)
+        if incl_replies and (df_replies is not None) and (not df_replies.empty):
+            # Conversación
+            df_rep_conv = df_replies[df_replies["scope"] == "CONV"].copy()
+            replies_conv_total = int(len(df_rep_conv))
+            if replies_conv_total > 0:
+                pct_neg_replies_conv = round((df_rep_conv["Sentimiento"] == "Negativo").mean() * 100, 1)
+                pct_pos_replies_conv = round((df_rep_conv["Sentimiento"] == "Positivo").mean() * 100, 1)
+                temp_replies_conv = calc_temperatura_con_min(pct_neg_replies_conv, pct_pos_replies_conv, replies_conv_total, MIN_REPLIES_ALERTA)
+        
+            # Amplificación
+            df_rep_amp = df_replies[df_replies["scope"] == "AMP"].copy()
+            replies_amp_total = int(len(df_rep_amp))
+            if replies_amp_total > 0:
+                pct_neg_replies_amp = round((df_rep_amp["Sentimiento"] == "Negativo").mean() * 100, 1)
+                pct_pos_replies_amp = round((df_rep_amp["Sentimiento"] == "Positivo").mean() * 100, 1)
+                temp_replies_amp = calc_temperatura_con_min(pct_neg_replies_amp, pct_pos_replies_amp, replies_amp_total, MIN_REPLIES_ALERTA)
+        
+        # 6.1 Conversación (solo si está seleccionado Originales o Quotes)
         if incl_originales or incl_quotes:
-            k1, k2, k3, k13, k10, k12 = st.columns(6)
-            k1.metric("Conversación (posts)", f"{n_conversacion}")
-            k2.metric("Temp. conversación", temp_conv)
-            k3.metric("% Neg (conv)", f"{pct_neg_conv}%")
-            k13.metric("% Pos (conv)", f"{pct_pos_conv}%")
-            k10.metric("Interacción (conv)", f"{interaccion_conversacion}")
-            k12.metric("Narrativa #1 (conv)", narrativa_conv_1)
+            if incl_replies:
+                k1, k2, k3, k13, k10, k12, k15, k16, k17 = st.columns(9)
+                k1.metric("Conversación (posts)", f"{n_conversacion}")
+                k2.metric("Temp. conversación", temp_conv)
+                k3.metric("% Neg (conv)", f"{pct_neg_conv}%")
+                k13.metric("% Pos (conv)", f"{pct_pos_conv}%")
+                k10.metric("Interacción (conv)", f"{interaccion_conversacion}")
+                k12.metric("Narrativa #1 (conv)", narrativa_conv_1)
+        
+                k15.metric("Replies (conv)", f"{replies_conv_total}")
+                k16.metric("Temp. replies (conv)", temp_replies_conv)
+                k17.metric("% Neg (replies conv)", f"{pct_neg_replies_conv}%")
+            else:
+                k1, k2, k3, k13, k10, k12 = st.columns(6)
+                k1.metric("Conversación (posts)", f"{n_conversacion}")
+                k2.metric("Temp. conversación", temp_conv)
+                k3.metric("% Neg (conv)", f"{pct_neg_conv}%")
+                k13.metric("% Pos (conv)", f"{pct_pos_conv}%")
+                k10.metric("Interacción (conv)", f"{interaccion_conversacion}")
+                k12.metric("Narrativa #1 (conv)", narrativa_conv_1)
         else:
             st.info("Conversación oculta: no está seleccionado 'Posts originales' o 'RT con cita'.")
         
-        # ✅ Mostrar fila de Amplificación SOLO si el usuario marcó RT puros
+        # 6.2 Amplificación (solo si RT puros)
         if incl_retweets:
-            k4, k5, k6, k14, k8, k9 = st.columns(6)            
-            k4.metric("Amplificación (RT puros)", f"{total_ampl}")
-            k5.metric("Temp. amplificación", temp_amp)
-            k6.metric("% Neg (amp)", f"{pct_neg_amp}%")
-            k14.metric("% Pos (amp)", f"{pct_pos_amp}%")
-            k8.metric("Likesta (amp)", f"{likes_total_amp}")
-            k9.metric("Narrativa #1 (amp)", narrativa_amp_1)
+            if incl_replies:
+                k4, k5, k6, k14, k8, k9, k18, k19, k20 = st.columns(9)
+                k4.metric("Amplificación (RT puros)", f"{total_ampl}")
+                k5.metric("Temp. amplificación", temp_amp)
+                k6.metric("% Neg (amp)", f"{pct_neg_amp}%")
+                k14.metric("% Pos (amp)", f"{pct_pos_amp}%")
+                k8.metric("Likesta (amp)", f"{likes_total_amp}")
+                k9.metric("Narrativa #1 (amp)", narrativa_amp_1)
+        
+                k18.metric("Replies (amp)", f"{replies_amp_total}")
+                k19.metric("Temp. replies (amp)", temp_replies_amp)
+                k20.metric("% Neg (replies amp)", f"{pct_neg_replies_amp}%")
+            else:
+                k4, k5, k6, k14, k8, k9 = st.columns(6)
+                k4.metric("Amplificación (RT puros)", f"{total_ampl}")
+                k5.metric("Temp. amplificación", temp_amp)
+                k6.metric("% Neg (amp)", f"{pct_neg_amp}%")
+                k14.metric("% Pos (amp)", f"{pct_pos_amp}%")
+                k8.metric("Likesta (amp)", f"{likes_total_amp}")
+                k9.metric("Narrativa #1 (amp)", narrativa_amp_1)
         else:
             st.info("Amplificación oculta: no está seleccionado 'RT puros'.")
+        
+        # Caption contextual (para no confundir)
+        caption_parts = []
+        if (incl_originales or incl_quotes):
+            caption_parts.append(f"Conv: Pos {pct_pos_conv}% | Neu {pct_neu_conv}% | Neg {pct_neg_conv}%")
+            if incl_replies:
+                caption_parts.append(f"Replies(conv): Neg {pct_neg_replies_conv}% | Temp {temp_replies_conv}")
+        
+        if incl_retweets:
+            caption_parts.append(f"Amp: Pos {pct_pos_amp}% | Neu {pct_neu_amp}% | Neg {pct_neg_amp}%")
+            if incl_replies:
+                caption_parts.append(f"Replies(amp): Neg {pct_neg_replies_amp}% | Temp {temp_replies_amp}")
+        
+        if caption_parts:
+            st.caption(" — ".join(caption_parts))
 
-        # ✅ Caption solo de lo que está visible (para no confundir)
-        if (incl_originales or incl_quotes) and incl_retweets:
-            st.caption(
-                f"Conv: Pos {pct_pos_conv}% | Neu {pct_neu_conv}% | Neg {pct_neg_conv}% — "
-                f"Amp (ponderado): Pos {pct_pos_amp}% | Neu {pct_neu_amp}% | Neg {pct_neg_amp}%."
-            )
-        elif (incl_originales or incl_quotes) and (not incl_retweets):
-            st.caption(
-                f"Conv: Pos {pct_pos_conv}% | Neu {pct_neu_conv}% | Neg {pct_neg_conv}%."
-            )
-        elif (not (incl_originales or incl_quotes)) and incl_retweets:
-            st.caption(
-                f"Amp (ponderado): Pos {pct_pos_amp}% | Neu {pct_neu_amp}% | Neg {pct_neg_amp}%."
-            )
         
         # -----------------------------
         # 7) Alertas (ajustadas a nueva lógica)
@@ -1305,6 +1611,20 @@ if st.button("Buscar en X"):
         # Poco volumen
         if n_conversacion < 5 and total_ampl < 10:
             alertas.append("ℹ️ Muestra pequeña. Interpretar resultados como señal preliminar (no concluyente).")
+
+        # Replies (conversación)
+        if incl_replies and (incl_originales or incl_quotes):
+            if replies_conv_total >= MIN_REPLIES_ALERTA and pct_neg_replies_conv >= 40:
+                alertas.append("💬 Replies en conversación con tono negativo alto. Señal de descarga emocional: priorizar respuesta/clarificación y monitorear escalamiento.")
+        
+        # Replies (amplificación)
+        if incl_replies and incl_retweets:
+            if replies_amp_total >= MIN_REPLIES_ALERTA and pct_neg_replies_amp >= 40:
+                alertas.append("💬 Replies en tweets amplificados con tono negativo alto. Riesgo de bola de nieve reputacional: vigilar hilo original, vocerías y contexto.")
+        
+        # Señal: muchos replies con pocos RT (puede ser debate intenso)
+        if incl_replies and (replies_conv_total + replies_amp_total) >= 50 and total_ampl < 20:
+            alertas.append("🗣️ Alto volumen de replies con baja amplificación: conversación intensa (debate/descarga) aunque no necesariamente viral. Conviene lectura cualitativa de hilos clave.")
         
         if alertas:
             for a in alertas:
@@ -1348,6 +1668,12 @@ if st.button("Buscar en X"):
                 "ampl_total": total_ampl,
                 "rt_puros_total": total_rt_puros,
                 "quotes_total": total_quotes,
+                "replies_conv_total": replies_conv_total if incl_replies else 0,
+                "replies_amp_total": replies_amp_total if incl_replies else 0,
+                "pct_neg_replies_conv": pct_neg_replies_conv if incl_replies else 0.0,
+                "pct_neg_replies_amp": pct_neg_replies_amp if incl_replies else 0.0,
+                "temp_replies_conv": temp_replies_conv if incl_replies else "N/A",
+                "temp_replies_amp": temp_replies_amp if incl_replies else "N/A",
             },
             "sentimiento_conversacion_pct": {"positivo": pct_pos_conv, "neutral": pct_neu_conv, "negativo": pct_neg_conv},
             "sentimiento_amplificacion_pct_ponderado": {"positivo": pct_pos_amp, "neutral": pct_neu_amp, "negativo": pct_neg_amp},
@@ -1358,7 +1684,8 @@ if st.button("Buscar en X"):
             "ejemplos_top_interaccion_conversacion": ejemplos_conv,
             "ejemplos_top_amplificados": ejemplos_amp,
             "nota": "Quotes cuentan como conversación y como amplificación. RT puros solo amplificación. Sentimiento en conversación no se duplica por RT puros.",
-            "nota_ubicacion": "Ubicación inferida desde perfil/bio; no es geolocalización exacta."
+            "nota_ubicacion": "Ubicación inferida desde perfil/bio; no es geolocalización exacta.",
+            "nota_replies": "Los replies reflejan reacción directa/descarga emocional. Interpretar temperatura y sentimiento de replies como señal complementaria (puede ser más intensa que RT)."
         }
         
         bullets_ia, gemini_status = resumen_ejecutivo_gemini(payload, debug=debug_gemini)
@@ -1445,7 +1772,33 @@ if st.button("Buscar en X"):
             else:
                 st.info("Gráfico de amplificación oculto: no está seleccionado 'RT puros'.")
 
+        # --- 9.2b Donuts de sentimiento de Replies (si está activado)
+        if incl_replies and (df_replies is not None) and (not df_replies.empty):
+            st.markdown("### 💬 Sentimiento — Replies (comentarios)")
         
+            rA, rB = st.columns(2)
+            with rA:
+                df_rep_conv = df_replies[df_replies["scope"] == "CONV"].copy()
+                if not df_rep_conv.empty:
+                    sent_counts_r = df_rep_conv["Sentimiento"].value_counts().reset_index()
+                    sent_counts_r.columns = ["Sentimiento", "Cantidad"]
+                    fig_rep_conv = px.pie(sent_counts_r, names="Sentimiento", values="Cantidad", hole=0.45, title="🧁 Replies — Conversación")
+                    st.plotly_chart(fig_rep_conv, use_container_width=True)
+                else:
+                    st.info("Sin replies de conversación en el rango.")
+        
+            with rB:
+                df_rep_amp = df_replies[df_replies["scope"] == "AMP"].copy()
+                if not df_rep_amp.empty:
+                    sent_counts_r2 = df_rep_amp["Sentimiento"].value_counts().reset_index()
+                    sent_counts_r2.columns = ["Sentimiento", "Cantidad"]
+                    fig_rep_amp = px.pie(sent_counts_r2, names="Sentimiento", values="Cantidad", hole=0.45, title="🧁 Replies — Amplificación")
+                    st.plotly_chart(fig_rep_amp, use_container_width=True)
+                else:
+                    st.info("Sin replies de amplificación en el rango.")
+        else:
+            st.caption("Replies desactivado: no se muestran donuts de comentarios.")
+
         # --- 9.3 Sentimiento por día (solo conversación, porque RT puros no deben duplicar)
         if df_conv_d is not None and not df_conv_d.empty and "Sentimiento" in df_conv_d.columns:
             sent_por_dia = df_conv_d.groupby(["Día", "Sentimiento"]).size().reset_index(name="Cantidad")
@@ -1537,9 +1890,11 @@ if st.button("Buscar en X"):
         titulo_all = ""
         
         cols_conv = [
-            "tipo",  # 👈 útil para ver si es Original o Quote
+            "tipo",
             "Autor", "Fecha", "Likes", "Retweets", "Interacción",
-            "Sentimiento", "Ubicación inferida", "Confianza",
+            "Sentimiento",
+            "Replies", "Sentimiento_replies",
+            "Ubicación inferida", "Confianza",
             "Texto", "Link"
         ]
         
@@ -1557,18 +1912,59 @@ if st.button("Buscar en X"):
             elif (not incl_originales) and incl_quotes:
                 titulo_top = "1) 🔥 Top 10 — Retweets con cita (Quotes)"
                 titulo_all = "2) 📄 Ver TODOS los retweets con cita (Quotes)"
-        else:
-            df_conv_base = pd.DataFrame()
+            else:
+                # Por coherencia (aunque normalmente no llega acá)
+                titulo_top = "1) 🔥 Top 10 — Conversación"
+                titulo_all = "2) 📄 Ver TODA la conversación"
         
         # Renderizar
         if df_conv_base is None or df_conv_base.empty:
             st.info("No se muestran tablas de 'Conversación' porque no hay datos (Originales/Quotes) con los filtros actuales.")
         else:
+            # ---------------------------------------------------------
+            # Enriquecer conversación con Replies agregados (si existe)
+            # ---------------------------------------------------------
+            # Blindaje: puede no existir df_replies_conv_agg si replies está apagado o falló la búsqueda
+            if "incl_replies" not in locals():
+                incl_replies = st.session_state.get("incl_replies", False)
+        
+            tiene_replies_conv_agg = ("df_replies_conv_agg" in locals()) and (df_replies_conv_agg is not None) and (not df_replies_conv_agg.empty)
+        
+            if incl_replies and tiene_replies_conv_agg:
+                # df_replies_conv_agg: scope=CONV, target_id = tweet_id
+                tmp_rep = df_replies_conv_agg.rename(columns={"target_id": "tweet_id"}).copy()
+                tmp_rep["tweet_id"] = tmp_rep["tweet_id"].astype(str)
+        
+                # Blindaje: aseguramos tweet_id
+                if "tweet_id" not in df_conv_base.columns:
+                    df_conv_base["tweet_id"] = ""
+        
+                df_conv_base["tweet_id"] = df_conv_base["tweet_id"].astype(str)
+        
+                df_conv_base = df_conv_base.merge(
+                    tmp_rep[["tweet_id", "Replies", "Sentimiento_replies"]],
+                    on="tweet_id",
+                    how="left"
+                )
+        
+                df_conv_base["Replies"] = pd.to_numeric(df_conv_base["Replies"], errors="coerce").fillna(0).astype(int)
+                df_conv_base["Sentimiento_replies"] = df_conv_base["Sentimiento_replies"].fillna("N/A")
+            else:
+                # columnas por consistencia
+                df_conv_base["Replies"] = 0
+                df_conv_base["Sentimiento_replies"] = "N/A"
+        
             # ✅ Rank por Interacción (si existe)
             if "Interacción" in df_conv_base.columns:
                 df_conv_rank = df_conv_base.sort_values("Interacción", ascending=False).copy()
             else:
                 df_conv_rank = df_conv_base.copy()
+        
+            # Si por cualquier motivo quedaron títulos vacíos, ponemos fallback
+            if not titulo_top:
+                titulo_top = "1) 🔥 Top 10 — Conversación"
+            if not titulo_all:
+                titulo_all = "2) 📄 Ver TODA la conversación"
         
             # TABLA 1) TOP 10
             render_table(
@@ -1585,7 +1981,7 @@ if st.button("Buscar en X"):
                     titulo_all,
                     cols=cols_conv,
                     top=None
-                )        
+                )    
         # ------------------------------------------------------------
         # TABLA 3) TOP 10 — Amplificación (muestra el TWEET ORIGINAL)
         # Ranking: Ampl_total (RT puros + Quotes) en el rango
@@ -1596,17 +1992,36 @@ if st.button("Buscar en X"):
                 df_amp_rank = df_amplificacion.sort_values("Ampl_total", ascending=False).copy()
             else:
                 df_amp_rank = df_amplificacion.copy()
+
+            # --- Enriquecer amplificación con Replies agregados (si existe)
+            if incl_replies and (df_replies_amp_agg is not None) and (not df_replies_amp_agg.empty):
+                tmp_rep2 = df_replies_amp_agg.rename(columns={"target_id": "original_id"}).copy()
+                tmp_rep2["original_id"] = tmp_rep2["original_id"].astype(str)
             
-            cols_top_amp = [           
-                 "Autor",
-                 "Fechaua",
-                 "Ampl_total",            # (ya es RT_puros_en_rango)
-                 "RT_puros_en_rango",
-                 "Likesta",
-                 "Sentimiento_dominante",
-                 "Ubicación_dominante", "Confianza_dominante",
-                 "Texto_original",
-                 "Link"
+                df_amp_rank["original_id"] = df_amp_rank["original_id"].astype(str)
+                df_amp_rank = df_amp_rank.merge(
+                    tmp_rep2[["original_id", "Replies", "Sentimiento_replies"]],
+                    on="original_id",
+                    how="left"
+                )
+                df_amp_rank["Replies"] = df_amp_rank["Replies"].fillna(0).astype(int)
+                df_amp_rank["Sentimiento_replies"] = df_amp_rank["Sentimiento_replies"].fillna("N/A")
+            else:
+                df_amp_rank["Replies"] = 0
+                df_amp_rank["Sentimiento_replies"] = "N/A"
+
+            
+            cols_top_amp = [               
+                "Autor",
+                "Fechaua",
+                "Ampl_total",
+                "RT_puros_en_rango",
+                "Likesta",
+                "Sentimiento_dominante",
+                "Replies", "Sentimiento_replies",
+                "Ubicación_dominante", "Confianza_dominante",
+                "Texto_original",
+                "Link"
             ]
             
             render_table(
