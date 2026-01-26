@@ -840,6 +840,7 @@ if st.button("Buscar en X"):
         
             rows.append({
                 "tweet_id": str(t.id),
+                "conversation_id": str(getattr(t, "conversation_id", "")) if getattr(t, "conversation_id", None) else str(t.id),
                 "original_id": str(original_id) if original_id else None,   # si es RT/Quote -> id del tweet original
                 "tipo": tipo,                                               # Original / RT / Quote
                 "Autor": f"@{username}" if username else (name or "Desconocido"),
@@ -1197,6 +1198,10 @@ if st.button("Buscar en X"):
                         pd.to_numeric(df_conv_targets.get("Likes", 0), errors="coerce").fillna(0) +
                         pd.to_numeric(df_conv_targets.get("Retweets", 0), errors="coerce").fillna(0)
                     )
+
+                if "conversation_id" not in df_conv_targets.columns:
+                    df_conv_targets["conversation_id"] = df_conv_targets["tweet_id"].astype(str)
+
                 df_conv_targets = df_conv_targets.sort_values("Interacción", ascending=False).head(TOP_TWEETS_CONV_REPLIES)
                 # para conv, el objetivo es el propio tweet (tweet_id) y conversation_id ya viene
                 conv_targets = df_conv_targets[["tweet_id", "conversation_id"]].dropna().astype(str).to_dict("records")
