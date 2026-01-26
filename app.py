@@ -2846,6 +2846,8 @@ if st.button("Buscar en X"):
             # ✅ NUEVO: títulos para render persistente
             TITULO_TOP_CONV=titulo_top if "titulo_top" in locals() and titulo_top else "1) 🔥 Top 10 — Conversación",
             TITULO_TOP_AMP="3) 📣 Top 10 — Amplificación (muestra el tweet ORIGINAL amplificado)",
+            TITULO_ALL_CONV=titulo_all if "titulo_all" in locals() and titulo_all else "2) 📄 Ver TODA la conversación",
+            TITULO_ALL_AMP="4) 📄 Ver TODA la amplificación (tweet ORIGINAL agregado)",
         )
 
         st.rerun()
