@@ -2831,7 +2831,6 @@ if st.button("Buscar en X"):
             DF_REPLIES_AMP_AGG=df_replies_amp_agg if "df_replies_amp_agg" in locals() else pd.DataFrame(),
             COLS_CONV=cols_conv,
             COLS_TOP_AMP=cols_top_amp,
-
             # ✅ NUEVO: para PDF
             REPORT_KPIS=report_kpis,
             REPORT_ALERTAS=alertas,
@@ -2841,12 +2840,24 @@ if st.button("Buscar en X"):
             # (opcional: guardar query/time_range explícito)
             query=query,
             time_range=time_range,
+            # ✅ NUEVO: títulos para render persistente
+            TITULO_TOP_CONV=titulo_top if "titulo_top" in locals() and titulo_top else "1) 🔥 Top 10 — Conversación",
+            TITULO_TOP_AMP="3) 📣 Top 10 — Amplificación (muestra el tweet ORIGINAL amplificado)",
         )
+
+        st.session_state["SKIP_PERSISTENT_RENDER_ONCE"] = True
+
 
 # ─────────────────────────────
 # Render persistente: si ya hay resultados, se muestran aunque cambies selects
 # ─────────────────────────────
 if st.session_state.get("HAS_RESULTS", False):
+
+    # ✅ Evita doble render en el MISMO run cuando vienes de "Buscar en X"
+    if st.session_state.get("SKIP_PERSISTENT_RENDER_ONCE", False):
+        st.session_state["SKIP_PERSISTENT_RENDER_ONCE"] = False
+        # No renderizamos nada persistente en este run para evitar duplicados
+        st.stop()
 
     df_conv_rank = st.session_state.get("DF_CONV_RANK", pd.DataFrame())
     df_amp_rank  = st.session_state.get("DF_AMP_RANK", pd.DataFrame())
