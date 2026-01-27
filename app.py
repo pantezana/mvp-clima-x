@@ -21,11 +21,11 @@ from datetime import datetime, timedelta
 # 🔎 Chequeo técnico: Plotly → PNG (Kaleido)
 # Solo diagnóstico (no afecta lógica)
 # ─────────────────────────────
-#try:
+try:
 import kaleido  # requerido por plotly.to_image()
-#    st.success("✅ Kaleido OK: exportación PNG habilitada (PDF con gráficos funcionará)")
-#except Exception as e:
-#    st.error(f"❌ Kaleido NO disponible: {type(e).__name__} — el PDF NO podrá incluir gráficos")
+    st.success("✅ Kaleido OK: exportación PNG habilitada (PDF con gráficos funcionará)")
+except Exception as e:
+    st.error(f"❌ Kaleido NO disponible: {type(e).__name__} — el PDF NO podrá incluir gráficos")
 
 st.set_page_config(page_title="MVP Clima en X", layout="wide")
 st.title("🖥️ MVP – Clima del Tema en X")
@@ -33,45 +33,54 @@ st.title("🖥️ MVP – Clima del Tema en X")
 bearer_token = st.secrets["X_BEARER_TOKEN"]
 client = tweepy.Client(bearer_token=bearer_token)
 
-query = st.text_input("Palabras clave / hashtags")
+# ─────────────────────────────
+# Panel de control lateral
+# ─────────────────────────────
+with st.sidebar:
+    st.header("⚙️ Parámetros")
 
-time_range = st.selectbox(
-    "Rango temporal",
-    ["24 horas", "48 horas","72 horas", "7 días", "30 días"]
-)
+    query = st.text_input("Palabras clave / hashtags")
 
+    time_range = st.selectbox(
+        "Rango temporal",
+        ["24 horas", "48 horas", "72 horas", "7 días", "30 días"]
+    )
+
+    limite_opcion = st.selectbox(
+        "Límite de publicaciones (cuota X)",
+        ["50", "100", "200", "500", "1000", "Sin límite (hasta donde llegue X)"],
+        index=2
+    )
+
+    max_posts = None if "Sin límite" in limite_opcion else int(limite_opcion)
+
+    st.markdown("### Tipo de contenido")
+    c1, c2 = st.columns(2)
+    with c1:
+        incluir_originales = st.checkbox("Posts originales", value=True)
+        incluir_quotes = st.checkbox("RT con cita (quote)", value=True)
+    with c2:
+        incluir_retweets = st.checkbox("RT puros", value=True)
+        incluir_replies = st.checkbox("Replies (comentarios)", value=False)
+
+    if not (incluir_originales or incluir_retweets or incluir_quotes):
+        st.warning("Selecciona al menos un tipo: Originales, RT puros o Quotes.")
+
+    MODELOS_SENTIMIENTO = {
+        "BETO (ES) – recomendado": "finiteautomata/beto-sentiment-analysis",
+        "Robertuito (ES) – social": "pysentimiento/robertuito-sentiment-analysis",
+        "Twitter-RoBERTa (X) – actual": "cardiffnlp/twitter-roberta-base-sentiment-latest",
+    }
+
+    modelo_nombre = st.selectbox(
+        "Modelo de sentimiento (IA)",
+        list(MODELOS_SENTIMIENTO.keys()),
+        index=0
+    )
+
+modelo_hf_id = MODELOS_SENTIMIENTO[modelo_nombre]
+HF_MODEL_URL = f"https://router.huggingface.co/hf-inference/models/{modelo_hf_id}"
 debug_gemini = False
-
-# ─────────────────────────────
-# Parámetros MVP de Replies (control cuota)
-# ─────────────────────────────
-TOP_TWEETS_CONV_REPLIES = 20     # top tweets conversación a los que se les buscará replies
-TOP_TWEETS_AMP_REPLIES  = 20     # top tweets amplificación (originales amplificados) a los que se les buscará replies
-MAX_REPLIES_POR_TWEET   = 50     # máximo replies por tweet objetivo (control de cuota)
-MIN_REPLIES_ALERTA      = 20     # mínimo replies para considerar temperatura/alertas como “señal razonable”
-W_REPLIES = 5                    # Score = Interacción + (W_REPLIES * Replies)
-
-
-# Límite de publicaciones a consultar (control de cuota)
-limite_opcion = st.selectbox(
-    "Límite de publicaciones a consultar (control de cuota X)",
-    ["50", "100", "200", "500", "1000", "Sin límite (hasta donde llegue X)"],
-    index=2  # 200 por defecto (ajústalo si quieres)
-)
-
-max_posts = None if "Sin límite" in limite_opcion else int(limite_opcion)
-
-st.markdown("### Tipo de contenido a analizar")
-
-c1, c2, c3, c4 = st.columns(4)
-with c1:
-    incluir_originales = st.checkbox("Posts originales", value=True)
-with c2:
-    incluir_retweets = st.checkbox("Retweets (RT puros)", value=True)
-with c3:
-    incluir_quotes = st.checkbox("Retweets con cita (quote)", value=True)
-with c4:
-    incluir_replies = st.checkbox("Replies (comentarios)", value=False)
 
 # Regla simple de validación (neófito-friendly)
 if not (incluir_originales or incluir_retweets or incluir_quotes):
@@ -121,22 +130,13 @@ st.session_state["query_final"] = query_final
 st.session_state["incl_replies"] = incluir_replies
 
 # ─────────────────────────────
-# Selector de modelo de sentimiento (Hugging Face)
+# Parámetros MVP de Replies (control cuota)
 # ─────────────────────────────
-MODELOS_SENTIMIENTO = {
-    "BETO (ES) – recomendado": "finiteautomata/beto-sentiment-analysis",
-    "Robertuito (ES) – social": "pysentimiento/robertuito-sentiment-analysis",
-    "Twitter-RoBERTa (X) – actual": "cardiffnlp/twitter-roberta-base-sentiment-latest",
-}
-
-modelo_nombre = st.selectbox(
-    "Modelo de sentimiento (IA)",
-    list(MODELOS_SENTIMIENTO.keys()),
-    index=0
-)
-
-modelo_hf_id = MODELOS_SENTIMIENTO[modelo_nombre]
-HF_MODEL_URL = f"https://router.huggingface.co/hf-inference/models/{modelo_hf_id}"
+TOP_TWEETS_CONV_REPLIES = 20     # top tweets conversación a los que se les buscará replies
+TOP_TWEETS_AMP_REPLIES  = 20     # top tweets amplificación (originales amplificados) a los que se les buscará replies
+MAX_REPLIES_POR_TWEET   = 50     # máximo replies por tweet objetivo (control de cuota)
+MIN_REPLIES_ALERTA      = 20     # mínimo replies para considerar temperatura/alertas como “señal razonable”
+W_REPLIES = 5                    # Score = Interacción + (W_REPLIES * Replies)
 
 
 # ─────────────────────────────
