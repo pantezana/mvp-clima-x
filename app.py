@@ -1136,6 +1136,21 @@ def build_report_payload_from_state(mode: str):
     top_threads_conv = df_conv_top10["tweet_id"].astype(str).tolist() if ("tweet_id" in df_conv_top10.columns) else []
     top_threads_amp  = df_amp_top10["original_id"].astype(str).tolist() if ("original_id" in df_amp_top10.columns) else []
 
+    # ✅ NUEVO: metadata por hilo para imprimir “Tweet objetivo” bonito en el PDF
+    threads_meta_conv = build_threads_meta(
+        df_top=df_conv_top10,
+        id_col="tweet_id",
+        text_col="Texto",
+        url_fallback_col="URL"
+    )
+
+    threads_meta_amp = build_threads_meta(
+        df_top=df_amp_top10,
+        id_col="original_id",
+        text_col="Texto_original",
+        url_fallback_col="URL_original"
+    )
+
     return {
         "mode": mode,
         "meta": meta,
@@ -1156,7 +1171,10 @@ def build_report_payload_from_state(mode: str):
             "df": df_replies.copy() if df_replies is not None else pd.DataFrame(),
             "top_threads_conv": top_threads_conv,
             "top_threads_amp": top_threads_amp,
-            "per_thread": replies_per_thread
+            "per_thread": replies_per_thread,
+            # ✅ NUEVO
+            "threads_meta_conv": threads_meta_conv,
+            "threads_meta_amp": threads_meta_amp
         }
     }
 
@@ -1383,12 +1401,34 @@ def generate_pdf_report(payload: dict) -> bytes:
             dfr["__srank"] = dfr["Sentimiento"].apply(_sent_rank_for_sort)
             dfr = dfr.sort_values(["target_id", "__srank", "Fecha"], ascending=[True, True, False])
 
+            meta_conv = rep_cfg.get("threads_meta_conv", {}) or {}
+            meta_amp  = rep_cfg.get("threads_meta_amp", {}) or {}
+            meta_map = meta_conv if scope == "CONV" else meta_amp
+
             # por cada hilo objetivo
             for tid in target_ids:
                 chunk = dfr[dfr["target_id"].astype(str) == str(tid)].copy()
                 if chunk.empty:
-                    continue
-                story.append(Paragraph(f"Hilo objetivo: {tid}", styles["Body"]))
+                    continue                
+                info = meta_map.get(str(tid), None)
+
+                # Además del total “agregado”, calculamos cuántos replies tenemos realmente en df_replies
+                total_encontrados = int(len(chunk))
+
+                if info:
+                    story.append(Paragraph(
+                        f"<b>Tweet objetivo:</b> { _safe_str(info.get('autor')) } "
+                        f"— “{ _safe_str(info.get('texto')) }” "
+                        f"— <b>Comentarios:</b> { _safe_str(info.get('replies')) } "
+                        f"(<b>encontrados en muestra:</b> {total_encontrados}) "
+                        f"— <b>Link:</b> { _safe_str(info.get('url')) }",
+                        styles["Body"]
+                    ))
+                else:
+                    story.append(Paragraph(
+                        f"<b>Tweet objetivo:</b> {tid} — <b>encontrados en muestra:</b> {total_encontrados}",
+                        styles["Body"]
+                    ))
 
                 # recortar a N por hilo
                 chunk = chunk.head(per_thread).copy()
@@ -1552,6 +1592,64 @@ def render_persisted_tables_and_replies():
     else:
         st.info("Sin resultados de amplificación para mostrar.")
 
+def build_threads_meta(df_top: pd.DataFrame, id_col: str, text_col: str, url_fallback_col: str = "URL") -> dict:
+    """
+    Devuelve dict:
+      target_id -> {"autor":..., "texto":..., "replies": int, "url": ...}
+    Usa Link/URL/URL_original si existen.
+    """
+    meta = {}
+    if df_top is None or df_top.empty or id_col not in df_top.columns:
+        return meta
+
+    d = df_top.copy()
+    d[id_col] = d[id_col].astype(str)
+
+    # Asegurar columnas
+    if "Autor" not in d.columns: d["Autor"] = ""
+    if text_col not in d.columns: d[text_col] = ""
+    if "Replies" not in d.columns: d["Replies"] = 0
+    if "Link" not in d.columns: d["Link"] = ""
+
+    for _, row in d.iterrows():
+        tid = str(row.get(id_col, "") or "").strip()
+        if not tid:
+            continue
+
+        autor = _safe_str(row.get("Autor", "")).strip()
+
+        texto = _safe_str(row.get(text_col, "")).strip()
+        texto_short = (texto[:180] + "…") if len(texto) > 180 else texto
+
+        # Replies: total agregado (no el recorte por per_thread)
+        try:
+            replies_total = int(pd.to_numeric(row.get("Replies", 0), errors="coerce") or 0)
+        except Exception:
+            replies_total = 0
+
+        # URL: preferir Link (si es HTML o URL), luego URL/URL_original
+        link_val = _safe_str(row.get("Link", "")).strip()
+        url = ""
+        if link_val:
+            # si Link viene como HTML <a href=...> -> extraer
+            url = _strip_html(link_val) if ("<a" in link_val or "href=" in link_val) else link_val
+
+        if not url:
+            # probar URL / URL_original / fallback
+            for c in ["URL", "URL_original", url_fallback_col]:
+                v = _safe_str(row.get(c, "")).strip()
+                if v.startswith("http"):
+                    url = v
+                    break
+
+        meta[tid] = {
+            "autor": autor or "N/A",
+            "texto": texto_short or "N/A",
+            "replies": replies_total,
+            "url": url or f"https://x.com/i/web/status/{tid}"
+        }
+
+    return meta
 
 if st.button("Buscar en X"):
     now = time.time()
