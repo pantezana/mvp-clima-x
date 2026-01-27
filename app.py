@@ -925,9 +925,39 @@ def _df_prepare_for_pdf(df: pd.DataFrame, cols: list[str], mode: str, max_text_c
             d[c] = pd.to_datetime(d[c], errors="coerce")
             d[c] = d[c].dt.strftime("%Y-%m-%d %H:%M:%S").fillna("")
 
-    # Link: si viene HTML, lo convertimos a URL
-    if "Link" in cols and "Link" in d.columns:
-        d["Link"] = d["Link"].apply(_strip_html)
+    # Link: asegurar que haya URL para PDF
+    # - Si Link viene vacío, lo construimos desde URL o URL_original
+    # - Si Link viene como HTML (<a href=...>), lo convertimos a URL limpia
+    if "Link" in cols:
+        # 1) Asegurar columna Link exista
+        if "Link" not in d.columns:
+            d["Link"] = ""
+    
+        # 2) Si Link está vacío, rellenar desde URL / URL_original
+        def _fill_link(row):
+            link_val = _safe_str(row.get("Link", "")).strip()
+    
+            # Si viene en HTML: extraer href
+            if "<a" in link_val or "href=" in link_val:
+                return _strip_html(link_val)
+    
+            # Si ya es URL directa, dejarla
+            if link_val.startswith("http"):
+                return link_val
+    
+            # Si está vacío: usar URL o URL_original
+            url = _safe_str(row.get("URL", "")).strip()
+            if url.startswith("http"):
+                return url
+    
+            url2 = _safe_str(row.get("URL_original", "")).strip()
+            if url2.startswith("http"):
+                return url2
+    
+            return ""  # nada disponible
+    
+        d["Link"] = d.apply(_fill_link, axis=1)
+
 
     # Texto largo: truncar en Ejecutivo, menos truncado en Completo (igual conviene algo)
     if "Texto" in d.columns:
