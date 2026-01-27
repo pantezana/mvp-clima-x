@@ -22,7 +22,7 @@ from datetime import datetime, timedelta
 # Solo diagnóstico (no afecta lógica)
 # ─────────────────────────────
 #try:
-    import kaleido  # requerido por plotly.to_image()
+import kaleido  # requerido por plotly.to_image()
 #    st.success("✅ Kaleido OK: exportación PNG habilitada (PDF con gráficos funcionará)")
 #except Exception as e:
 #    st.error(f"❌ Kaleido NO disponible: {type(e).__name__} — el PDF NO podrá incluir gráficos")
