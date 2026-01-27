@@ -21,11 +21,11 @@ from datetime import datetime, timedelta
 # 🔎 Chequeo técnico: Plotly → PNG (Kaleido)
 # Solo diagnóstico (no afecta lógica)
 # ─────────────────────────────
-try:
-    import kaleido  # requerido por plotly.to_image()
-    st.success("✅ Kaleido OK: exportación PNG habilitada (PDF con gráficos funcionará)")
-except Exception as e:
-    st.error(f"❌ Kaleido NO disponible: {type(e).__name__} — el PDF NO podrá incluir gráficos")
+#try:
+#    import kaleido  # requerido por plotly.to_image()
+#    st.success("✅ Kaleido OK: exportación PNG habilitada (PDF con gráficos funcionará)")
+#except Exception as e:
+#    st.error(f"❌ Kaleido NO disponible: {type(e).__name__} — el PDF NO podrá incluir gráficos")
 
 st.set_page_config(page_title="MVP Clima en X", layout="wide")
 st.title("🖥️ MVP – Clima del Tema en X")
