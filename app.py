@@ -1347,6 +1347,140 @@ def generate_pdf_report(payload: dict) -> bytes:
     buffer.close()
     return pdf_bytes
 
+def render_pdf_controls():
+    st.markdown("## 📄 Descargar reporte PDF")
+
+    modo_pdf = st.selectbox(
+        "Tipo de PDF",
+        ["PDF Ejecutivo (recomendado)", "PDF Completo (100% literal)"],
+        index=0,
+        key="sel_modo_pdf"
+    )
+
+    colp1, colp2 = st.columns([1, 3])
+    with colp1:
+        if st.button("Generar PDF", key="btn_gen_pdf"):
+            mode = "EJECUTIVO" if "Ejecutivo" in modo_pdf else "COMPLETO"
+            with st.spinner("Generando PDF..."):
+                payload = build_report_payload_from_state(mode)
+                pdf_bytes = generate_pdf_report(payload)
+
+            st.session_state["LAST_PDF_BYTES"] = pdf_bytes
+            st.success("PDF generado.")
+
+    with colp2:
+        pdf_bytes = st.session_state.get("LAST_PDF_BYTES", None)
+        if pdf_bytes:
+            filename = f"reporte_clima_x_{datetime.now().strftime('%Y%m%d_%H%M')}.pdf"
+            st.download_button(
+                "⬇️ Descargar PDF",
+                data=pdf_bytes,
+                file_name=filename,
+                mime="application/pdf",
+                key="btn_download_pdf"
+            )
+
+def render_persisted_header_kpis_alertas_resumen():
+    # 1) KPIs (los guardaste en REPORT_KPIS)
+    report_kpis = st.session_state.get("REPORT_KPIS", {}) or {}
+    if report_kpis:
+        st.markdown("## 🧾 Panel ejecutivo (persistente)")
+        # mostramos como tabla simple (no consume cuota y no depende de variables locales)
+        df_k = pd.DataFrame([{"Indicador": k, "Valor": v} for k, v in report_kpis.items()])
+        st.dataframe(df_k, use_container_width=True, hide_index=True)
+
+    # 2) Alertas
+    st.markdown("### 🚨 Alertas (persistente)")
+    alertas = st.session_state.get("REPORT_ALERTAS", []) or []
+    if alertas:
+        for a in alertas:
+            st.warning(a)
+    else:
+        st.info("Sin alertas fuertes con los umbrales actuales.")
+
+    # 3) Resumen ejecutivo
+    st.markdown("## ⭐ Resumen ejecutivo (persistente)")
+    resumen_md = st.session_state.get("REPORT_RESUMEN_MD", "") or ""
+    if resumen_md:
+        st.markdown(resumen_md)
+    else:
+        st.caption("Resumen IA no disponible en el estado persistente.")
+
+    # 4) Nota metodológica
+    nota = st.session_state.get("REPORT_NOTA_METODO", "") or ""
+    if nota:
+        st.caption(nota)
+
+def render_persisted_visuals():
+    # Re-render de imágenes PNG guardadas (no plotly, pero sí mantiene “lo anterior” visible)
+    figs = st.session_state.get("REPORT_FIGS", {}) or {}
+    if not figs:
+        return
+
+    st.markdown("## 📊 Tablero visual (persistente)")
+    # orden similar al PDF
+    order = [
+        ("fig_vol", "📈 Volumen por día (Conversación vs RT puros)"),
+        ("fig_sent_conv", "🧁 Sentimiento — Conversación"),
+        ("fig_sent_amp", "🧁 Sentimiento — Amplificación (ponderado)"),
+        ("fig_terms_conv", "🏷️ Top términos — Conversación"),
+        ("fig_terms_amp", "🏷️ Top términos — Amplificación"),
+        ("fig_rep_conv", "🧁 Replies — Conversación"),
+        ("fig_rep_amp", "🧁 Replies — Amplificación"),
+    ]
+    for k, title in order:
+        if k in figs:
+            st.markdown(f"#### {title}")
+            st.image(figs[k], use_container_width=True)
+
+def render_persisted_tables_and_replies():
+    df_conv_rank = st.session_state.get("DF_CONV_RANK", pd.DataFrame())
+    df_amp_rank  = st.session_state.get("DF_AMP_RANK", pd.DataFrame())
+    df_replies   = st.session_state.get("DF_REPLIES", pd.DataFrame())
+    cols_conv    = st.session_state.get("COLS_CONV", [])
+    cols_top_amp = st.session_state.get("COLS_TOP_AMP", [])
+    incl_replies = st.session_state.get("incl_replies", False)
+
+    st.markdown("## 📌 Resultados en tablas (persistente)")
+
+    if df_conv_rank is not None and not df_conv_rank.empty:
+        render_table(df_conv_rank, "1) 🔥 Top 10 — Conversación", cols=cols_conv, top=10)
+
+        if incl_replies and (df_replies is not None) and (not df_replies.empty):
+            st.markdown("#### 💬 Leer replies — TOP 10 (Conversación)")
+            df_conv_top10 = df_conv_rank.head(10).copy()
+            render_replies_expanders_top10(
+                df_top10=df_conv_top10,
+                df_replies=df_replies,
+                scope="CONV",
+                id_col="tweet_id",
+                title_prefix="💬 Replies (conv)"
+            )
+    else:
+        st.info("Sin resultados de conversación para mostrar.")
+
+    if df_amp_rank is not None and not df_amp_rank.empty:
+        render_table(
+            df_amp_rank,
+            "3) 📣 Top 10 — Amplificación (muestra el tweet ORIGINAL amplificado)",
+            cols=cols_top_amp,
+            top=10
+        )
+
+        if incl_replies and (df_replies is not None) and (not df_replies.empty):
+            st.markdown("#### 💬 Leer replies — TOP 10 (Amplificación)")
+            df_amp_top10 = df_amp_rank.head(10).copy()
+            render_replies_expanders_top10(
+                df_top10=df_amp_top10,
+                df_replies=df_replies,
+                scope="AMP",
+                id_col="original_id",
+                title_prefix="💬 Replies (amp)"
+            )
+    else:
+        st.info("Sin resultados de amplificación para mostrar.")
+
+
 if st.button("Buscar en X"):
     now = time.time()
     if now - st.session_state["last_search_ts"] < 20:
@@ -2848,98 +2982,19 @@ if st.button("Buscar en X"):
 # Render persistente: si ya hay resultados, se muestran aunque cambies selects
 # ─────────────────────────────
 if st.session_state.get("HAS_RESULTS", False):
-
-    # ✅ Evita doble render en el MISMO run cuando vienes de "Buscar en X"
-    if st.session_state.get("SKIP_PERSISTENT_RENDER_ONCE", False):
-        st.session_state["SKIP_PERSISTENT_RENDER_ONCE"] = False
-        # No renderizamos nada persistente en este run para evitar duplicados
-        st.stop()
-
-    df_conv_rank = st.session_state.get("DF_CONV_RANK", pd.DataFrame())
-    df_amp_rank  = st.session_state.get("DF_AMP_RANK", pd.DataFrame())
-    df_replies   = st.session_state.get("DF_REPLIES", pd.DataFrame())
-
-    df_replies_conv_agg = st.session_state.get("DF_REPLIES_CONV_AGG", pd.DataFrame())
-    df_replies_amp_agg  = st.session_state.get("DF_REPLIES_AMP_AGG", pd.DataFrame())
-
-    cols_conv    = st.session_state.get("COLS_CONV", [])
-    cols_top_amp = st.session_state.get("COLS_TOP_AMP", [])
-
-    # ✅ 1) DESCARGA PDF (primero, mejor UX)
-    st.markdown("## 📄 Descargar reporte PDF")
-
-    modo_pdf = st.selectbox(
-        "Tipo de PDF",
-        ["PDF Ejecutivo (recomendado)", "PDF Completo (100% literal)"],
-        index=0,
-        key="sel_modo_pdf"
-    )
-
-    colp1, colp2 = st.columns([1, 3])
-    with colp1:
-        if st.button("Generar PDF", key="btn_gen_pdf"):
-            mode = "EJECUTIVO" if "Ejecutivo" in modo_pdf else "COMPLETO"
-
-            with st.spinner("Generando PDF..."):
-                payload = build_report_payload_from_state(mode)
-                pdf_bytes = generate_pdf_report(payload)
-
-            st.session_state["LAST_PDF_BYTES"] = pdf_bytes
-            st.success("PDF generado.")
-
-    with colp2:
-        pdf_bytes = st.session_state.get("LAST_PDF_BYTES", None)
-        if pdf_bytes:
-            filename = f"reporte_clima_x_{datetime.now().strftime('%Y%m%d_%H%M')}.pdf"
-            st.download_button(
-                "⬇️ Descargar PDF",
-                data=pdf_bytes,
-                file_name=filename,
-                mime="application/pdf",
-                key="btn_download_pdf"
-            )
-
+    
+    # ✅ 0) SIEMPRE mostrar descarga PDF (inclusive en el run posterior a "Buscar en X")
+    render_pdf_controls()
     st.divider()
 
-    # 👇 IMPORTANTE:
-    # Aquí NO vuelvas a llamar a la API.
-    # Solo vuelve a mostrar tablas + UX de replies.
-
-    if df_conv_rank is not None and not df_conv_rank.empty:
-        render_table(df_conv_rank, "1) 🔥 Top 10 — Conversación", cols=cols_conv, top=10)
-
-        incl_replies = st.session_state.get("incl_replies", False)
-        if incl_replies and (df_replies is not None) and (not df_replies.empty):
-            st.markdown("#### 💬 Leer replies — TOP 10 (Conversación)")
-            df_conv_top10 = df_conv_rank.head(10).copy()
-            render_replies_expanders_top10(
-                df_top10=df_conv_top10,
-                df_replies=df_replies,
-                scope="CONV",
-                id_col="tweet_id",
-                title_prefix="💬 Replies (conv)"
-            )
+    # ✅ 1) Evitar duplicar SOLO el “cuerpo persistente” cuando vienes de "Buscar en X"
+    #     OJO: ya NO usamos st.stop() antes del PDF.
+    if st.session_state.get("SKIP_PERSISTENT_RENDER_ONCE", False):
+        st.session_state["SKIP_PERSISTENT_RENDER_ONCE"] = False
+        # En este run ya se mostró todo dentro del botón, así que aquí solo dejamos el PDF visible.
     else:
-        st.info("Sin resultados de conversación para mostrar.")
-
-    if df_amp_rank is not None and not df_amp_rank.empty:
-        render_table(
-            df_amp_rank,
-            "3) 📣 Top 10 — Amplificación (muestra el tweet ORIGINAL amplificado)",
-            cols=cols_top_amp,
-            top=10
-        )
-
-        incl_replies = st.session_state.get("incl_replies", False)
-        if incl_replies and (df_replies is not None) and (not df_replies.empty):
-            st.markdown("#### 💬 Leer replies — TOP 10 (Amplificación)")
-            df_amp_top10 = df_amp_rank.head(10).copy()
-            render_replies_expanders_top10(
-                df_top10=df_amp_top10,
-                df_replies=df_replies,
-                scope="AMP",
-                id_col="original_id",
-                title_prefix="💬 Replies (amp)"
-            )
-    else:
-        st.info("Sin resultados de amplificación para mostrar.")
+        # ✅ 2) En reruns (por filtros), re-renderizamos TODO lo previo a las tablas
+        render_persisted_header_kpis_alertas_resumen()
+        render_persisted_visuals()
+        st.divider()
+        render_persisted_tables_and_replies()
