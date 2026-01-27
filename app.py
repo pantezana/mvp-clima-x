@@ -1024,11 +1024,12 @@ def _make_styles():
 def _table_style_basic(repeat_header=True):
     ts = TableStyle([
         ("FONTNAME", (0, 0), (-1, 0), "Helvetica-Bold"),
-        ("FONTSIZE", (0, 0), (-1, 0), 8.5),
+        ("FONTSIZE", (0, 0), (-1, 0), 7.2),         # 👈 más chico
         ("TEXTCOLOR", (0, 0), (-1, 0), colors.white),
-        ("BACKGROUND", (0, 0), (-1, 0), colors.HexColor("#2E7D32")),  # verde sobrio
-        ("ALIGN", (0, 0), (-1, 0), "LEFT"),
-        ("VALIGN", (0, 0), (-1, -1), "TOP"),
+        ("BACKGROUND", (0, 0), (-1, 0), colors.HexColor("#2E7D32")),
+        ("ALIGN", (0, 0), (-1, 0), "CENTER"),       # 👈 header centrado
+        ("VALIGN", (0, 0), (-1, 0), "MIDDLE"),      # 👈 vertical centrado
+        ("VALIGN", (0, 1), (-1, -1), "TOP"),
         ("GRID", (0, 0), (-1, -1), 0.25, colors.grey),
         ("FONTSIZE", (0, 1), (-1, -1), 7.8),
         ("LEFTPADDING", (0, 0), (-1, -1), 4),
@@ -1051,8 +1052,13 @@ def _df_to_longtable_story(df: pd.DataFrame, styles, title: str, col_widths=None
         story.append(Paragraph("Sin datos.", styles["Body"]))
         return story
 
-    # Convertimos celdas a Paragraph para wrap
-    data = [list(df.columns)]
+    # Header como Paragraph (wrap)
+    hdr = []
+    for c in df.columns:
+        label = _header_label(c)
+        hdr.append(Paragraph(label, styles["CenterSmall"]))
+    data = [hdr]
+
     for _, row in df.iterrows():
         r = []
         for c in df.columns:
@@ -1335,6 +1341,12 @@ def generate_pdf_report(payload: dict) -> bytes:
                 widths[i] = 2.6*cm
             if c in ("Confianza","Confianza_dominante"):
                 widths[i] = 1.7*cm
+            if c in ("Interacción",):
+                widths[i] = 2.2*cm
+            if c in ("Sentimiento","Sentimiento_dominante","Sentimiento_replies"):
+                widths[i] = 2.2*cm
+            if c in ("Replies",):
+                widths[i] = 1.8*cm
         # normalizar para no pasarnos
         s = sum(widths)
         if s > total_w:
@@ -1650,6 +1662,31 @@ def build_threads_meta(df_top: pd.DataFrame, id_col: str, text_col: str, url_fal
         }
 
     return meta
+
+def _header_label(col: str) -> str:
+    """
+    Devuelve un header con saltos de línea para evitar superposición.
+    Ajusta aquí los nombres “largos” que se ven feos en PDF.
+    """
+    mapping = {
+        "Interacción": "Interac<br/>ción",
+        "Sentimiento": "Sentim<br/>iento",
+        "Replies": "Repl<br/>ies",
+        "Sentimiento_replies": "Sentim<br/>replies",
+        "Ubicación inferida": "Ubicación<br/>inferida",
+        "Ubicación_dominante": "Ubicación<br/>dominante",
+        "Confianza": "Conf<br/>ianza",
+        "Confianza_dominante": "Conf<br/>dominante",
+        "Texto": "Texto",  # aquí no hacemos split porque ya tiene mucho ancho
+        "Texto_original": "Texto<br/>original",
+        "RT_puros_en_rango": "RT<br/>puros",
+        "Ampl_total": "Ampl<br/>total",
+        "Fechaua": "Fecha<br/>últ. ampl.",
+        "Likesta": "Likes<br/>total",
+        "Link": "Link",
+        "Autor": "Autor",
+    }
+    return mapping.get(col, col)
 
 if st.button("Buscar en X"):
     now = time.time()
