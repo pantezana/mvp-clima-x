@@ -1202,7 +1202,8 @@ def generate_pdf_report(payload: dict) -> bytes:
     mode = payload["mode"]
 
     # ── Portada
-    story.append(Paragraph("Reporte de Clima en X", styles["H1"]))
+    story.append(Paragraph("Reporte de Clima Social del Tema en X (Twiter)", styles["H1"]))
+    tory.append(Paragraph("Análisis de conversación, amplificación y reacciones (replies)", styles["Body"]))
     story.append(Paragraph(f"<b>Modo:</b> {mode}", styles["Body"]))
     story.append(Paragraph(f"<b>Query:</b> { _safe_str(meta.get('query')) }", styles["Body"]))
     story.append(Paragraph(f"<b>Rango:</b> { _safe_str(meta.get('time_range')) }", styles["Body"]))
