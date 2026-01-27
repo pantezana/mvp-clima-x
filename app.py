@@ -1258,7 +1258,7 @@ def generate_pdf_report(payload: dict) -> bytes:
     que la conversación general.<br/><br/>
     
     <b>Sentimiento:</b> Clasificación automática del contenido en
-    Positivo, Neutral o Negativo mediante modelos de lenguaje y reglas léxicas de respaldo.<br/><br/>
+    Positivo, Neutral o Negativo mediante modelos de lenguaje (IA) y reglas léxicas de respaldo.<br/><br/>
     
     <b>Temperatura:</b> Indicador sintético del clima general:
     🔴 Riesgo reputacional (negativo alto),
@@ -3184,7 +3184,7 @@ if st.button("Buscar en X"):
         
         report_nota = (
             "Advertencia metodológica: señal temprana basada en publicaciones públicas de X; "
-            "sentimiento automatizado (IA/fallback) y ubicación inferida desde perfil/bio. "
+            "sentimiento automatizado (IA/fallback) y ubicación inferida desde perfil/bio. En la presente versión análisis generado mediante IA Gemini"
             "No representa a toda la población. "
             "Quotes cuentan como conversación; RT puros solo amplificación."
         )
