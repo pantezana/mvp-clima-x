@@ -17,6 +17,16 @@ from reportlab.lib.units import cm
 from reportlab.lib.enums import TA_LEFT, TA_CENTER
 from datetime import datetime, timedelta
 
+# ─────────────────────────────
+# 🔎 Chequeo técnico: Plotly → PNG (Kaleido)
+# Solo diagnóstico (no afecta lógica)
+# ─────────────────────────────
+try:
+    import kaleido  # requerido por plotly.to_image()
+    st.success("✅ Kaleido OK: exportación PNG habilitada (PDF con gráficos funcionará)")
+except Exception as e:
+    st.error(f"❌ Kaleido NO disponible: {type(e).__name__} — el PDF NO podrá incluir gráficos")
+
 st.set_page_config(page_title="MVP Clima en X", layout="wide")
 st.title("🖥️ MVP – Clima del Tema en X")
 
@@ -931,12 +941,13 @@ def _df_prepare_for_pdf(df: pd.DataFrame, cols: list[str], mode: str, max_text_c
     return d[cols].copy()
 
 def _plotly_to_png_bytes(fig, width=1200, height=650, scale=2):
-    """
-    Convierte plotly fig a PNG (bytes) usando kaleido.
-    """
+    if fig is None:
+        return None
     try:
         return fig.to_image(format="png", width=width, height=height, scale=scale)
-    except Exception:
+    except Exception as e:
+        # 🔎 dejar rastro para diagnóstico
+        st.session_state["LAST_PNG_ERROR"] = f"{type(e).__name__}: {str(e)[:200]}"
         return None
 
 def _make_styles():
@@ -2521,6 +2532,17 @@ if st.button("Buscar en X"):
         # 9) Tablero visual (actualizado)
         # -----------------------------
         st.markdown("## 📊 Tablero visual")
+
+        # ─────────────────────────────
+        # Inicialización de figuras (blindaje para PDF + rerun)
+        # ─────────────────────────────
+        fig_vol = None
+        fig_sent_conv = None
+        fig_sent_amp = None
+        fig_terms = None
+        fig_terms2 = None
+        fig_rep_conv = None
+        fig_rep_amp = None
         
         # --- 9.1 Volumen por día (conversación vs RT puros)
         def add_dia(df_x: pd.DataFrame, col_fecha="Fecha"):
@@ -2940,23 +2962,29 @@ if st.button("Buscar en X"):
             "No representa a toda la población. "
             "Quotes cuentan como conversación; RT puros solo amplificación."
         )
+         
+        # ─────────────────────────────
+        # Exportar figuras Plotly a PNG (para PDF)
+        # ─────────────────────────────
+        figs_png = {
+            "fig_vol": _plotly_to_png_bytes(fig_vol),
+            "fig_sent_conv": _plotly_to_png_bytes(fig_sent_conv),
+            "fig_sent_amp": _plotly_to_png_bytes(fig_sent_amp),
+            "fig_terms_conv": _plotly_to_png_bytes(fig_terms),
+            "fig_terms_amp": _plotly_to_png_bytes(fig_terms2),
+            "fig_rep_conv": _plotly_to_png_bytes(fig_rep_conv),
+            "fig_rep_amp": _plotly_to_png_bytes(fig_rep_amp),
+        }
         
-        # Convertir figuras plotly a PNG (bytes) para meter en PDF
-        figs_png = {}
-        figs_png["fig_vol"] = _plotly_to_png_bytes(fig_vol) if "fig_vol" in locals() else None
-        figs_png["fig_sent_conv"] = _plotly_to_png_bytes(fig_sent_conv) if "fig_sent_conv" in locals() else None
-        figs_png["fig_sent_amp"] = _plotly_to_png_bytes(fig_sent_amp) if "fig_sent_amp" in locals() else None
-        figs_png["fig_terms_conv"] = _plotly_to_png_bytes(fig_terms) if "fig_terms" in locals() else None
-        figs_png["fig_terms_amp"] = _plotly_to_png_bytes(fig_terms2) if "fig_terms2" in locals() else None
-        figs_png["fig_rep_conv"] = _plotly_to_png_bytes(fig_rep_conv) if "fig_rep_conv" in locals() else None
-        figs_png["fig_rep_amp"] = _plotly_to_png_bytes(fig_rep_amp) if "fig_rep_amp" in locals() else None
-        
-        # Limpieza: eliminar Nones para ahorrar memoria
-        figs_png = {k:v for k,v in figs_png.items() if v}
+        # Filtrar solo las figuras que realmente existen
+        figs_png = {k: v for k, v in figs_png.items() if v is not None}
 
         # ─────────────────────────────
         # Guardar resultados en session_state (CLAVE para que no se borre al cambiar selects)
         # ─────────────────────────────
+        if st.session_state.get("LAST_PNG_ERROR"):
+        st.warning("Export PNG falló: " + st.session_state["LAST_PNG_ERROR"])
+
         _save_results(
             DF_CONV_RANK=df_conv_rank if "df_conv_rank" in locals() else pd.DataFrame(),
             DF_AMP_RANK=df_amp_rank if "df_amp_rank" in locals() else pd.DataFrame(),
