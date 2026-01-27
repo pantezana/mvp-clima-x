@@ -1242,6 +1242,32 @@ def generate_pdf_report(payload: dict) -> bytes:
         ]))
         story.append(t)
         story.append(Spacer(1, 7))
+    # ── Leyenda explicativa (clave para lector no experto)
+    story.append(Paragraph("Leyenda de lectura", styles["H2"]))
+    
+    leyenda_texto = """
+    <b>Conversación (conv):</b> Publicaciones que aportan contenido propio al debate
+    (posts originales y retweets con cita). Refleja qué se dice y cómo se argumenta.<br/><br/>
+    
+    <b>Amplificación (amp):</b> Difusión de mensajes mediante retweets puros (RT).
+    Cada tweet original se muestra una sola vez y los RT se agregan como volumen.
+    Refleja qué mensajes se están propagando.<br/><br/>
+    
+    <b>Replies (comentarios):</b> Respuestas directas a un tweet dentro de un hilo.
+    Reflejan reacción inmediata y descarga emocional, y pueden mostrar mayor intensidad
+    que la conversación general.<br/><br/>
+    
+    <b>Sentimiento:</b> Clasificación automática del contenido en
+    Positivo, Neutral o Negativo mediante modelos de lenguaje y reglas léxicas de respaldo.<br/><br/>
+    
+    <b>Temperatura:</b> Indicador sintético del clima general:
+    🔴 Riesgo reputacional (negativo alto),
+    🟡 Mixto / neutro,
+    🟢 Clima favorable (positivo predominante).
+    En replies, la temperatura solo se calcula cuando hay una muestra suficiente.
+    """
+    story.append(Paragraph(leyenda_texto, styles["Small"]))
+    story.append(Spacer(1, 12))
 
     # ── Alertas
     alertas = payload.get("alertas", []) or []
