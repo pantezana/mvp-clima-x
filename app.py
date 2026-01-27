@@ -577,7 +577,7 @@ def fetch_replies_for_conversation_id(
 STOPWORDS = set([
     "de","la","que","el","en","y","a","los","del","se","las","por","un","para","con",
     "no","una","su","al","lo","como","más","pero","sus","le","ya","o","este","sí",
-    "porque","esta","entre","cuando","muy","sin","sobre"
+    "porque","esta","entre","cuando","muy","sin","sobre","https","http","tco","www"
 ])
             
 def limpiar_texto(texto):
@@ -594,6 +594,10 @@ def limpiar_texto(texto):
     if not isinstance(texto, str):
         texto = str(texto)
 
+    # ✅ quitar URLs (http/https) y t.co
+    texto = re.sub(r"https?://\S+", " ", texto, flags=re.IGNORECASE)
+    texto = re.sub(r"\bt\.co/\S+", " ", texto, flags=re.IGNORECASE)
+    
     palabras = re.findall(r"\b[a-záéíóúñ]+\b", texto.lower())
     return [p for p in palabras if p not in STOPWORDS and len(p) > 3]
 
@@ -1211,10 +1215,10 @@ def generate_pdf_report(payload: dict) -> bytes:
     story.append(Spacer(1, 10))
 
     filtros = []
-    if meta.get("incl_originales"): filtros.append("Originales")
-    if meta.get("incl_quotes"): filtros.append("Quotes")
+    if meta.get("incl_originales"): filtros.append("Tweets Originales")
+    if meta.get("incl_quotes"): filtros.append("RT con cita - Quotes")
     if meta.get("incl_retweets"): filtros.append("RT puros")
-    if meta.get("incl_replies"): filtros.append("Replies")
+    if meta.get("incl_replies"): filtros.append("Replies/Comentarios")
     story.append(Paragraph(f"<b>Incluye:</b> {', '.join(filtros) if filtros else 'N/A'}", styles["Body"]))
     story.append(Spacer(1, 14))
 
