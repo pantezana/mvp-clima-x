@@ -1212,7 +1212,7 @@ def generate_pdf_report(payload: dict) -> bytes:
     story.append(Paragraph(f"<b>Query:</b> { _safe_str(meta.get('query')) }", styles["Body"]))
     story.append(Paragraph(f"<b>Rango:</b> { _safe_str(meta.get('time_range')) }", styles["Body"]))
     story.append(Paragraph(f"<b>Generado:</b> { _safe_str(meta.get('generated_at')) }", styles["Body"]))
-    story.append(Spacer(1, 10))
+    story.append(Spacer(1, 5))
 
     filtros = []
     if meta.get("incl_originales"): filtros.append("Tweets Originales")
@@ -1220,7 +1220,7 @@ def generate_pdf_report(payload: dict) -> bytes:
     if meta.get("incl_retweets"): filtros.append("RT puros")
     if meta.get("incl_replies"): filtros.append("Replies/Comentarios")
     story.append(Paragraph(f"<b>Incluye:</b> {', '.join(filtros) if filtros else 'N/A'}", styles["Body"]))
-    story.append(Spacer(1, 14))
+    story.append(Spacer(1, 7))
 
     # ── Panel ejecutivo (KPIs)
     kpis = payload.get("kpis", {}) or {}
@@ -1241,7 +1241,7 @@ def generate_pdf_report(payload: dict) -> bytes:
             ("FONTSIZE", (0,1), (-1,-1), 8),
         ]))
         story.append(t)
-        story.append(Spacer(1, 10))
+        story.append(Spacer(1, 7))
 
     # ── Alertas
     alertas = payload.get("alertas", []) or []
