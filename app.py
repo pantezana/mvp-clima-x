@@ -1083,7 +1083,8 @@ def build_report_payload_from_state(mode: str):
     resumen_md = st.session_state.get("REPORT_RESUMEN_MD", "")
     nota_metodo = st.session_state.get("REPORT_NOTA_METODO", "")
 
-    figs = st.session_state.get("REPORT_FIGS", {})  # dict de png_bytes
+    # ✅ NUEVO: Traer figuras Plotly (NO PNG)
+    figs_plotly = st.session_state.get("REPORT_FIGS_PLOTLY", {})  # dict de figuras plotly
 
     # Límites por modo
     if mode == "EJECUTIVO":
@@ -1112,7 +1113,7 @@ def build_report_payload_from_state(mode: str):
         "alertas": alertas,
         "resumen_md": resumen_md,
         "nota_metodo": nota_metodo,
-        "figs": figs,
+        "REPORT_FIGS_PLOTLY": figs_plotly,
         "tables": {
             "conv_top10": _df_prepare_for_pdf(df_conv_top10, cols_conv, mode=mode),
             "conv_all": _df_prepare_for_pdf(df_conv_all, cols_conv, mode=mode),
@@ -1216,10 +1217,29 @@ def generate_pdf_report(payload: dict) -> bytes:
     story.append(PageBreak())
 
     # ── Gráficos
-    figs = payload.get("figs", {}) or {}
-    if figs:
+    # ── Gráficos (desde figuras Plotly guardadas en payload)
+    figs_png = {}
+    error_png = ""
+
+    # 1) Convertir Plotly -> PNG (si existe REPORT_FIGS_PLOTLY en el payload)
+    try:
+        figs_plotly = payload.get("REPORT_FIGS_PLOTLY", {}) or {}
+        figs_png = {
+            k: _plotly_to_png_bytes(v)
+            for k, v in figs_plotly.items()
+            if v is not None
+        }
+        # filtrar Nones (por si alguna conversión falló)
+        figs_png = {k: v for k, v in figs_png.items() if v is not None}
+
+    except Exception as e:
+        figs_png = {}
+        error_png = str(e)
+
+    # 2) Renderizar en el PDF SOLO si tenemos PNG
+    if figs_png:
         story.append(Paragraph("Tablero visual", styles["H1"]))
-        # orden recomendado
+
         for key, title in [
             ("fig_vol", "Volumen por día (Conversación vs RT puros)"),
             ("fig_sent_conv", "Sentimiento — Conversación"),
@@ -1229,10 +1249,21 @@ def generate_pdf_report(payload: dict) -> bytes:
             ("fig_rep_conv", "Replies — Conversación (sentimiento)"),
             ("fig_rep_amp", "Replies — Amplificación (sentimiento)"),
         ]:
-            png = figs.get(key)
+            png = figs_png.get(key)
             story += _add_png_to_story(png, styles, title)
 
         story.append(PageBreak())
+
+    else:
+        # Si no pudimos exportar PNG (por ejemplo Chrome no instalado),
+        # dejamos un aviso dentro del PDF en vez de “desaparecer” la sección.
+        story.append(Paragraph("Tablero visual", styles["H1"]))
+        story.append(Paragraph("No se pudieron incrustar gráficos en el PDF.", styles["Body"]))
+        if error_png:
+            story.append(Paragraph(f"Detalle técnico: { _safe_str(error_png) }", styles["Small"]))
+        story.append(Spacer(1, 10))
+        story.append(PageBreak())
+
 
     # ── Tablas 1–4 (CRÍTICO)
     tables = payload["tables"]
@@ -2966,18 +2997,18 @@ if st.button("Buscar en X"):
         # ─────────────────────────────
         # Exportar figuras Plotly a PNG (para PDF)
         # ─────────────────────────────
-        figs_png = {
-            "fig_vol": _plotly_to_png_bytes(fig_vol),
-            "fig_sent_conv": _plotly_to_png_bytes(fig_sent_conv),
-            "fig_sent_amp": _plotly_to_png_bytes(fig_sent_amp),
-            "fig_terms_conv": _plotly_to_png_bytes(fig_terms),
-            "fig_terms_amp": _plotly_to_png_bytes(fig_terms2),
-            "fig_rep_conv": _plotly_to_png_bytes(fig_rep_conv),
-            "fig_rep_amp": _plotly_to_png_bytes(fig_rep_amp),
-        }
+        # figs_png = {
+        #    "fig_vol": _plotly_to_png_bytes(fig_vol),
+        #    "fig_sent_conv": _plotly_to_png_bytes(fig_sent_conv),
+        #    "fig_sent_amp": _plotly_to_png_bytes(fig_sent_amp),
+        #    "fig_terms_conv": _plotly_to_png_bytes(fig_terms),
+        #    "fig_terms_amp": _plotly_to_png_bytes(fig_terms2),
+        #    "fig_rep_conv": _plotly_to_png_bytes(fig_rep_conv),
+        #    "fig_rep_amp": _plotly_to_png_bytes(fig_rep_amp),
+        #}
         
         # Filtrar solo las figuras que realmente existen
-        figs_png = {k: v for k, v in figs_png.items() if v is not None}
+        #figs_png = {k: v for k, v in figs_png.items() if v is not None}
 
         # ─────────────────────────────
         # Guardar resultados en session_state (CLAVE para que no se borre al cambiar selects)
@@ -2999,7 +3030,18 @@ if st.button("Buscar en X"):
             REPORT_ALERTAS=alertas,
             REPORT_RESUMEN_MD=bullets_ia if bullets_ia else "",
             REPORT_NOTA_METODO=report_nota,
-            REPORT_FIGS=figs_png,
+            
+            # ✅ NUEVO: guardamos las FIGURAS PLOTLY (NO PNG) para exportarlas recién al generar PDF
+            REPORT_FIGS_PLOTLY={
+                "fig_vol": fig_vol if "fig_vol" in locals() else None,
+                "fig_sent_conv": fig_sent_conv if "fig_sent_conv" in locals() else None,
+                "fig_sent_amp": fig_sent_amp if "fig_sent_amp" in locals() else None,
+                "fig_terms_conv": fig_terms if "fig_terms" in locals() else None,
+                "fig_terms_amp": fig_terms2 if "fig_terms2" in locals() else None,
+                "fig_rep_conv": fig_rep_conv if "fig_rep_conv" in locals() else None,
+                "fig_rep_amp": fig_rep_amp if "fig_rep_amp" in locals() else None,
+            },
+            
             # (opcional: guardar query/time_range explícito)
             query=query,
             time_range=time_range,
