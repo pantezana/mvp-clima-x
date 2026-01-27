@@ -163,11 +163,6 @@ def _clear_results():
             del st.session_state[k]
     st.session_state["HAS_RESULTS"] = False
 
-# Botón opcional para limpiar resultados
-if st.button("🧹 Limpiar resultados"):
-    _clear_results()
-    st.rerun()
-
 # Lista simple (MVP) de departamentos/ciudades clave para inferir ubicación
 PERU_PLACES = [
     "Amazonas","Áncash","Apurímac","Arequipa","Ayacucho","Cajamarca","Callao","Cusco",
@@ -1718,7 +1713,26 @@ def _header_label(col: str) -> str:
     }
     return mapping.get(col, col)
 
-if st.button("Buscar en X"):
+
+# ─────────────────────────────
+# Botones en la misma fila
+# ─────────────────────────────
+col_buscar, col_limpiar = st.columns([3, 1])
+
+with col_buscar:
+    clicked_buscar = st.button("🔍 Buscar en X", use_container_width=True)
+
+with col_limpiar:
+    clicked_limpiar = st.button("🧹 Limpiar resultados", use_container_width=True)
+
+# ─────────────────────────────
+# Acciones asociadas a los botones
+# ─────────────────────────────
+if clicked_limpiar:
+    _clear_results()
+    st.rerun()
+
+if clicked_buscar:
     now = time.time()
     if now - st.session_state["last_search_ts"] < 20:
         st.warning("Espera 20 segundos entre búsquedas para evitar límites de X.")
