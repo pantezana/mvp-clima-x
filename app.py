@@ -2983,7 +2983,7 @@ if st.button("Buscar en X"):
         # Guardar resultados en session_state (CLAVE para que no se borre al cambiar selects)
         # ─────────────────────────────
         if st.session_state.get("LAST_PNG_ERROR"):
-        st.warning("Export PNG falló: " + st.session_state["LAST_PNG_ERROR"])
+            st.warning("Export PNG falló: " + st.session_state["LAST_PNG_ERROR"])
 
         _save_results(
             DF_CONV_RANK=df_conv_rank if "df_conv_rank" in locals() else pd.DataFrame(),
