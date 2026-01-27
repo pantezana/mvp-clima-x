@@ -1715,15 +1715,15 @@ def _header_label(col: str) -> str:
 
 
 # ─────────────────────────────
-# Botones en la misma fila
+# Botones alineados a la izquierda (tamaño normal)
 # ─────────────────────────────
-col_buscar, col_limpiar = st.columns([3, 1])
+col_buscar, col_limpiar, col_spacer = st.columns([2, 2, 8])
 
 with col_buscar:
-    clicked_buscar = st.button("🔍 Buscar en X", use_container_width=True)
+    clicked_buscar = st.button("🔍 Buscar en X")
 
 with col_limpiar:
-    clicked_limpiar = st.button("🧹 Limpiar resultados", use_container_width=True)
+    clicked_limpiar = st.button("🧹 Limpiar resultados")
 
 # ─────────────────────────────
 # Acciones asociadas a los botones
