@@ -28,7 +28,7 @@ from datetime import datetime, timedelta
 #    st.error(f"❌ Kaleido NO disponible: {type(e).__name__} — el PDF NO podrá incluir gráficos")
 
 st.set_page_config(page_title="MVP Clima en X", layout="wide")
-st.title("🖥️ MVP – Clima del Tema en X")
+st.title("🖥️ Clima de Opinión del Tema en X (Twiter)")
 
 bearer_token = st.secrets["X_BEARER_TOKEN"]
 client = tweepy.Client(bearer_token=bearer_token)
