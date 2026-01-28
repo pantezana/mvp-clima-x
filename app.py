@@ -132,8 +132,12 @@ st.session_state["incl_replies"] = incluir_replies
 # ─────────────────────────────
 # Parámetros MVP de Replies (control cuota)
 # ─────────────────────────────
-TOP_TWEETS_CONV_REPLIES = 20     # top tweets conversación a los que se les buscará replies
-TOP_TWEETS_AMP_REPLIES  = 20     # top tweets amplificación (originales amplificados) a los que se les buscará replies
+if time_range in ["7 días", "30 días"]:
+    TOP_TWEETS_CONV_REPLIES = 10
+    TOP_TWEETS_AMP_REPLIES  = 10
+else:
+    TOP_TWEETS_CONV_REPLIES = 20
+    TOP_TWEETS_AMP_REPLIES  = 20
 MAX_REPLIES_POR_TWEET   = 50     # máximo replies por tweet objetivo (control de cuota)
 MIN_REPLIES_ALERTA      = 20     # mínimo replies para considerar temperatura/alertas como “señal razonable”
 W_REPLIES = 5                    # Score = Interacción + (W_REPLIES * Replies)
@@ -516,26 +520,11 @@ def calc_temperatura_con_min(pct_neg: float, pct_pos: float, n: int, min_n: int 
         return "🟢 Clima favorable"
     return "🟡 Mixto / neutro"
 
-def fetch_replies_for_conversation_id(
-    client,
-    conversation_id: str,
-    start_time: str,
-    max_replies: int = 50
-):
-    """
-    Trae replies (is:reply) de un hilo identificado por conversation_id.
-    Devuelve lista de tweets (reply objects).
-
-    Blindajes:
-    - conversation_id debe ser numérico
-    - si X responde BadRequest (400), no tumba la app: retorna []
-    - si hay rate limit (429), también retorna [] y deja aviso
-    """
-    # 1) conversation_id válido
+def fetch_replies_for_conversation_id(client, conversation_id: str, start_time: str, max_replies: int = 50):
     if conversation_id is None:
         return []
     conversation_id = str(conversation_id).strip()
-    if not conversation_id or (not conversation_id.isdigit()):
+    if not conversation_id.isdigit():
         return []
 
     query = f"conversation_id:{conversation_id} is:reply"
@@ -548,10 +537,8 @@ def fetch_replies_for_conversation_id(
         if max_replies is not None and len(replies_all) >= max_replies:
             break
 
-        req_size = page_size
-        if max_replies is not None:
-            req_size = min(page_size, max_replies - len(replies_all))
-            req_size = max(10, req_size)
+        req_size = min(page_size, max_replies - len(replies_all)) if max_replies is not None else page_size
+        req_size = max(10, req_size)
 
         try:
             resp = client.search_recent_tweets(
@@ -563,14 +550,27 @@ def fetch_replies_for_conversation_id(
                 user_fields=["username", "name", "location", "description"],
                 next_token=next_token
             )
+
+        except tweepy.errors.TooManyRequests as e:
+            # ⏳ Esperar hasta reset (si viene en headers)
+            reset_ts = 0
+            try:
+                reset_ts = int(e.response.headers.get("x-rate-limit-reset", "0"))
+            except Exception:
+                reset_ts = 0
+
+            if reset_ts:
+                wait_sec = max(5, reset_ts - int(time.time()) + 2)
+                time.sleep(wait_sec)
+                continue
+
+            # fallback si no hay header
+            time.sleep(20)
+            continue
+
         except tweepy.errors.BadRequest:
-            # ✅ No tumba toda la corrida por 1 hilo malo
-            return []
-        except tweepy.errors.TooManyRequests:
-            # ✅ Si X te limita, no tumba: retornamos vacío
             return []
         except Exception:
-            # ✅ Cualquier otra cosa inesperada, no tumba
             return []
 
         if not resp or not resp.data:
@@ -2400,7 +2400,10 @@ if clicked_buscar:
                         start_time=start_time,
                         max_replies=MAX_REPLIES_POR_TWEET
                     )
-                
+
+                    # ⏸️ PAUSA SUAVE para no saturar la API de X
+                    time.sleep(0.4)
+
                     if replies_list is None:
                         fallos_replies += 1
                         continue
