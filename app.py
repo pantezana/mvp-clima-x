@@ -525,8 +525,17 @@ def fetch_replies_for_conversation_id(
     """
     Trae replies (is:reply) de un hilo identificado por conversation_id.
     Devuelve lista de tweets (reply objects).
+
+    Blindajes:
+    - conversation_id debe ser numérico
+    - si X responde BadRequest (400), no tumba la app: retorna []
+    - si hay rate limit (429), también retorna [] y deja aviso
     """
-    if not conversation_id:
+    # 1) conversation_id válido
+    if conversation_id is None:
+        return []
+    conversation_id = str(conversation_id).strip()
+    if not conversation_id or (not conversation_id.isdigit()):
         return []
 
     query = f"conversation_id:{conversation_id} is:reply"
@@ -544,15 +553,25 @@ def fetch_replies_for_conversation_id(
             req_size = min(page_size, max_replies - len(replies_all))
             req_size = max(10, req_size)
 
-        resp = client.search_recent_tweets(
-            query=query,
-            start_time=start_time,
-            max_results=req_size,
-            tweet_fields=["created_at", "public_metrics", "author_id", "conversation_id", "lang"],
-            expansions=["author_id"],
-            user_fields=["username", "name", "location", "description"],
-            next_token=next_token
-        )
+        try:
+            resp = client.search_recent_tweets(
+                query=query,
+                start_time=start_time,
+                max_results=req_size,
+                tweet_fields=["created_at", "public_metrics", "author_id", "conversation_id", "lang"],
+                expansions=["author_id"],
+                user_fields=["username", "name", "location", "description"],
+                next_token=next_token
+            )
+        except tweepy.errors.BadRequest:
+            # ✅ No tumba toda la corrida por 1 hilo malo
+            return []
+        except tweepy.errors.TooManyRequests:
+            # ✅ Si X te limita, no tumba: retornamos vacío
+            return []
+        except Exception:
+            # ✅ Cualquier otra cosa inesperada, no tumba
+            return []
 
         if not resp or not resp.data:
             break
@@ -1745,6 +1764,48 @@ if clicked_buscar:
     else:
         start_time = get_start_time(time_range).isoformat("T") + "Z"
 
+        # ─────────────────────────────
+        # Presupuesto de cuota (límite) incluyendo Replies
+        # ─────────────────────────────
+        incl_replies = st.session_state.get("incl_replies", False)
+        
+        # Presupuesto base = max_posts (si no hay "Sin límite")
+        max_posts_base = max_posts
+        replies_budget = None
+        
+        # Si replies está activo y hay límite numérico, repartimos presupuesto
+        if incl_replies and (max_posts is not None):
+            # 60% posts base / 40% replies
+            max_posts_base = max(50, int(round(max_posts * 0.60)))
+            replies_budget = max_posts - max_posts_base
+        
+            # Ajustar targets y replies por tweet para no reventar
+            # OJO: en este punto aún no sabemos cuántos targets reales habrá,
+            # así que hacemos una cota conservadora por defecto:
+            #  - Objetivos máx = TOP_CONV + TOP_AMP
+            max_objetivos = TOP_TWEETS_CONV_REPLIES + TOP_TWEETS_AMP_REPLIES
+            if max_objetivos <= 0:
+                max_objetivos = 1
+        
+            # Replies por tweet objetivo (mínimo 10)
+            max_replies_dyn = max(10, int(replies_budget // max_objetivos))
+        
+            # Cap superior para no abusar (tú puedes ajustar 50/100)
+            max_replies_dyn = min(max_replies_dyn, 50)
+        
+            # Aplicar dinámico
+            MAX_REPLIES_POR_TWEET = max_replies_dyn
+        
+            st.caption(
+                f"Presupuesto por límite={max_posts}. "
+                f"Posts base={max_posts_base}, Replies total≈{replies_budget}. "
+                f"MAX_REPLIES_POR_TWEET={MAX_REPLIES_POR_TWEET} "
+                f"(objetivos máx={max_objetivos})."
+            )
+        else:
+            # sin replies o sin límite, se mantiene tu configuración
+            max_posts_base = max_posts
+
         # Pedimos también info del autor vía expansions
         try:             
             # =========================
@@ -1784,7 +1845,7 @@ if clicked_buscar:
                 client=client,
                 base_query=base_query,
                 start_time=start_time,
-                max_posts=max_posts,
+                max_posts=max_posts_base,
                 tweet_fields_req=tweet_fields_req,
                 expansions_req=expansions_req,
                 user_fields_req=user_fields_req,
@@ -2286,23 +2347,36 @@ if clicked_buscar:
                     f"Buscando replies en hasta {len(conv_targets)} tweet(s) de conversación y {len(amp_targets)} tweet(s) amplificados. "
                     f"(máx {MAX_REPLIES_POR_TWEET} replies por tweet objetivo)"
                 )
-        
+
+                fallos_replies = 0
+                saltados_por_conv_id_invalido = 0
+
                 # --- Conversación replies ---
                 for item in conv_targets:
-                    target_tweet_id = str(item.get("tweet_id", ""))
-                    conv_id = str(item.get("conversation_id", ""))
-        
+                    target_tweet_id = str(item.get("tweet_id", "")).strip()
+                    conv_id = str(item.get("conversation_id", "")).strip()
+                
+                    # ✅ Blindaje: si conv_id no es numérico, saltamos
+                    if (not conv_id) or (not conv_id.isdigit()):
+                        saltados_por_conv_id_invalido += 1
+                        continue
+                
                     replies_list = fetch_replies_for_conversation_id(
                         client=client,
                         conversation_id=conv_id,
                         start_time=start_time,
                         max_replies=MAX_REPLIES_POR_TWEET
                     )
-        
+                
+                    # ✅ Si por algún motivo falla y retorna vacío, solo continúa
+                    if replies_list is None:
+                        fallos_replies += 1
+                        continue
+                
                     for r in replies_list:
                         reply_rows.append({
                             "scope": "CONV",
-                            "target_id": target_tweet_id,          # tweet_id objetivo
+                            "target_id": target_tweet_id,
                             "conversation_id": conv_id,
                             "reply_id": str(getattr(r, "id", "")),
                             "Texto": getattr(r, "text", "") or "",
@@ -2313,20 +2387,28 @@ if clicked_buscar:
         
                 # --- Amplificación replies (por original) ---
                 for item in amp_targets:
-                    original_id = str(item.get("original_id", ""))
-                    conv_id = str(item.get("conversation_id", ""))
-        
+                    original_id = str(item.get("original_id", "")).strip()
+                    conv_id = str(item.get("conversation_id", "")).strip()
+                
+                    if (not conv_id) or (not conv_id.isdigit()):
+                        saltados_por_conv_id_invalido += 1
+                        continue
+                
                     replies_list = fetch_replies_for_conversation_id(
                         client=client,
                         conversation_id=conv_id,
                         start_time=start_time,
                         max_replies=MAX_REPLIES_POR_TWEET
                     )
-        
+                
+                    if replies_list is None:
+                        fallos_replies += 1
+                        continue
+                
                     for r in replies_list:
                         reply_rows.append({
                             "scope": "AMP",
-                            "target_id": original_id,              # original_id objetivo
+                            "target_id": original_id,
                             "conversation_id": conv_id,
                             "reply_id": str(getattr(r, "id", "")),
                             "Texto": getattr(r, "text", "") or "",
@@ -2336,7 +2418,13 @@ if clicked_buscar:
                         })
         
                 df_replies = pd.DataFrame(reply_rows)
-        
+
+                st.caption(
+                    f"Replies: objetivos={total_objetivos}, "
+                    f"saltados_por_conv_id_invalido={saltados_por_conv_id_invalido}, "
+                    f"fallos={fallos_replies}"
+                )
+
                 if df_replies.empty:
                     st.info("No se encontraron replies dentro del rango temporal seleccionado (o la API no devolvió resultados).")
                 else:
