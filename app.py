@@ -43,7 +43,7 @@ with st.sidebar:
 
     time_range = st.selectbox(
         "Rango temporal",
-        ["24 horas", "48 horas", "72 horas", "7 días", "10 días", "15 días", "20 días", "30 días"]
+        ["24 horas", "48 horas", "72 horas", "7 días"]
     )
 
     limite_opcion = st.selectbox(
@@ -132,7 +132,7 @@ st.session_state["incl_replies"] = incluir_replies
 # ─────────────────────────────
 # Parámetros MVP de Replies (control cuota)
 # ─────────────────────────────
-if time_range in ["7 días", "10 días", "15 días", "20 días", "30 días"]:
+if time_range in ["7 días"]:
     TOP_TWEETS_CONV_REPLIES = 10
     TOP_TWEETS_AMP_REPLIES  = 10
 else:
@@ -185,13 +185,7 @@ def get_start_time(option):
         return datetime.utcnow() - timedelta(hours=72)
     if option == "7 días":
         return datetime.utcnow() - timedelta(hours=168)
-    if option == "10 días":
-        return datetime.utcnow() - timedelta(hours=240)
-    if option == "15 días":
-        return datetime.utcnow() - timedelta(hours=360)
-    if option == "20 días":
-        return datetime.utcnow() - timedelta(hours=480)
-    return datetime.utcnow() - timedelta(hours=720)
+    return datetime.utcnow() - timedelta(hours=168)
 
 def infer_peru_location(profile_location: str, profile_desc: str):
     
