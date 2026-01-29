@@ -43,7 +43,7 @@ with st.sidebar:
 
     time_range = st.selectbox(
         "Rango temporal",
-        ["24 horas", "48 horas", "72 horas", "7 días", "10 días","15 días", "20 días","30 días"]
+        ["24 horas", "48 horas", "72 horas", "7 días", "10 días", "15 días", "20 días", "30 días"]
     )
 
     limite_opcion = st.selectbox(
@@ -132,7 +132,7 @@ st.session_state["incl_replies"] = incluir_replies
 # ─────────────────────────────
 # Parámetros MVP de Replies (control cuota)
 # ─────────────────────────────
-if time_range in ["7 días", "30 días"]:
+if time_range in ["7 días", "10 días", "15 días", "20 días", "30 días"]:
     TOP_TWEETS_CONV_REPLIES = 10
     TOP_TWEETS_AMP_REPLIES  = 10
 else:
