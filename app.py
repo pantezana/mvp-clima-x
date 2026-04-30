@@ -3146,6 +3146,7 @@ if clicked_buscar:
         
         if incl_retweets:
             st.warning("DEBUG AMPLIFICACION")
+            
             try:
                 st.write("Cantidad df_rt_puros:", len(df_rt_puros))
             except Exception as e:
