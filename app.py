@@ -3147,27 +3147,27 @@ if clicked_buscar:
         if incl_retweets:
             st.warning("DEBUG AMPLIFICACION")
             
-                try:
-                    st.write("Cantidad df_rt_puros:", len(df_rt_puros))
-                except Exception as e:
-                    st.write("ERROR df_rt_puros:", e)
-                
-                try:
-                    st.write("Columnas df_rt_puros:")
-                    st.write(df_rt_puros.columns.tolist())
-                except Exception as e:
-                    st.write("ERROR columnas:", e)
-                
-                try:
-                    st.write("Primeras filas df_rt_puros:")
-                    st.dataframe(df_rt_puros.head(5))
-                except Exception as e:
-                    st.write("ERROR preview:", e)
-    
-                 try:
-                    st.write("Cantidad df_amplificacion:", len(df_amplificacion) if df_amplificacion is not None else "None")
-                except Exception as e:
-                    st.write("ERROR df_amplificacion:", e)
+                        try:
+                            st.write("Cantidad df_rt_puros:", len(df_rt_puros))
+                        except Exception as e:
+                            st.write("ERROR df_rt_puros:", e)
+                        
+                        try:
+                            st.write("Columnas df_rt_puros:")
+                            st.write(df_rt_puros.columns.tolist())
+                        except Exception as e:
+                            st.write("ERROR columnas:", e)
+                        
+                        try:
+                            st.write("Primeras filas df_rt_puros:")
+                            st.dataframe(df_rt_puros.head(5))
+                        except Exception as e:
+                            st.write("ERROR preview:", e)
+            
+                         try:
+                            st.write("Cantidad df_amplificacion:", len(df_amplificacion) if df_amplificacion is not None else "None")
+                        except Exception as e:
+                            st.write("ERROR df_amplificacion:", e)
                 
             if df_amplificacion is not None and not df_amplificacion.empty:
                 # ranking base (luego re-rankearemos por Score_ranking)
