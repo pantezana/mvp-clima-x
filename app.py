@@ -3131,6 +3131,19 @@ if clicked_buscar:
         # Ranking: Ampl_total (RT puros + Quotes) en el rango
         # ------------------------------------------------------------
         
+        cols_top_amp = [
+                "Autor",
+                "Fechaua",
+                "Ampl_total",
+                "RT_puros_en_rango",
+                "Likesta",
+                "Sentimiento_dominante",
+                "Replies", "Sentimiento_replies",
+                "Ubicación_dominante", "Confianza_dominante",
+                "Texto_original",
+                "Link"
+        ]
+        
         if incl_retweets:
             if df_amplificacion is not None and not df_amplificacion.empty:
                 # ranking base (luego re-rankearemos por Score_ranking)
@@ -3207,19 +3220,7 @@ if clicked_buscar:
                 # ─────────────────────────────────────────────
                 # 4) Render tabla TOP 10
                 # ─────────────────────────────────────────────
-                cols_top_amp = [
-                    "Autor",
-                    "Fechaua",
-                    "Ampl_total",
-                    "RT_puros_en_rango",
-                    "Likesta",
-                    "Sentimiento_dominante",
-                    "Replies", "Sentimiento_replies",
-                    "Ubicación_dominante", "Confianza_dominante",
-                    "Texto_original",
-                    "Link"
-                ]
-        
+              
                 render_table(
                     df_amp_rank,
                     "3) 📣 Top 10 — Amplificación (muestra el tweet ORIGINAL amplificado)",
@@ -3251,6 +3252,17 @@ if clicked_buscar:
                     cols=cols_top_amp,
                     top=None
                 )
+
+            if df_amp_rank is not None and not df_amp_rank.empty:
+                with st.expander("4) 📄 Ver TODA la amplificación (tweet ORIGINAL agregado)"):
+                    render_table(
+                        df_amp_rank,
+                        "4) 📄 Toda la amplificación (tweet ORIGINAL agregado)",
+                        cols=cols_top_amp,
+                        top=None
+                    )
+            else:
+                st.info("No hay datos para mostrar en la tabla 4 de amplificación.")
         else:
             st.info("No se muestra 'Amplificación' porque no está seleccionado 'RT puros'.")
         
