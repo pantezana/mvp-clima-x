@@ -724,6 +724,9 @@ def fetch_por_tipo(client, base_query, start_time, max_posts, tweet_fields_req, 
     tweets_all = []
     users_all = {}
 
+    st.warning("DEBUG QUERIES POR TIPO")
+    st.write(queries)
+
     for tipo, q in queries.items():
         tdata, udata = fetch_tweets_paginado(
             client=client,
@@ -734,6 +737,10 @@ def fetch_por_tipo(client, base_query, start_time, max_posts, tweet_fields_req, 
             expansions=expansions_req,
             user_fields=user_fields_req
         )
+
+        st.write(f"Tipo consultado: {tipo}")
+        st.write(f"Query enviada a X: {q}")
+        st.write(f"Resultados devueltos: {len(tdata) if tdata else 0}")
 
         if tdata:
             tweets_all.extend(tdata)
